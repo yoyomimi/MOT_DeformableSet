@@ -117,20 +117,24 @@ def load_checkpoint(cfg, model, optimizer, lr_scheduler, device, module_name='mo
     last_iter = -1
     resume_path = cfg.MODEL.RESUME_PATH
     resume = cfg.TRAIN.RESUME
-    if resume_path and resume:
+    if resume_path:
         if osp.exists(resume_path):
             checkpoint = torch.load(resume_path, map_location='cpu')
             # resume
             if 'state_dict' in checkpoint:
                 model.module.load_state_dict(checkpoint['state_dict'], strict=False)
-                logging.info(f'==> model pretrained from {resume_path} \n')
+                logging.info(f'==> model pretrained from {resume_path}')
             elif 'model' in checkpoint:
                 if module_name == 'detr':
                     model.module.detr_head.load_state_dict(checkpoint['model'], strict=False)
-                    logging.info(f'==> detr pretrained from {resume_path} \n')
+                    logging.info(f'==> detr pretrained from {resume_path}')
                 else:
                     model.module.load_state_dict(checkpoint['model'], strict=False)
-                    logging.info(f'==> model pretrained from {resume_path} \n')
+                    logging.info(f'==> model pretrained from {resume_path}')
+        else:
+            logging.error(f"==> checkpoint do not exists: \"{resume_path}\"")
+            raise FileNotFoundError
+        if resume is True:
             if 'optimizer' in checkpoint:
                 optimizer.load_state_dict(checkpoint['optimizer'])
                 logging.info(f'==> optimizer resumed, continue training')
@@ -145,12 +149,8 @@ def load_checkpoint(cfg, model, optimizer, lr_scheduler, device, module_name='mo
             if 'epoch' in checkpoint:
                 last_iter = checkpoint['epoch']
                 logging.info(f'==> last_epoch = {last_iter}')
-            # pre-train
         else:
-            logging.error(f"==> checkpoint do not exists: \"{resume_path}\"")
-            raise FileNotFoundError
-    else:
-        logging.info("==> train model without resume")
+            logging.info("==> train model without resume")
 
     return model, optimizer, lr_scheduler, last_iter
 
@@ -222,7 +222,7 @@ def get_det_criterion(cfg):
     return critertion
 
 def get_trainer(cfg, model, criterion, optimizer, lr_scheduler, postprocessors,
-                log_dir, performance_indicator, last_iter, rank, device, max_norm):
+                log_dir, performance_indicator, last_iter, rank, device, max_norm, logger):
     module = importlib.import_module(cfg.TRAINER.FILE)
     Trainer = getattr(module, cfg.TRAINER.NAME)(
         cfg,
@@ -236,7 +236,8 @@ def get_trainer(cfg, model, criterion, optimizer, lr_scheduler, postprocessors,
         last_iter=last_iter,
         rank=rank,
         device=device,
-        max_norm = max_norm
+        max_norm = max_norm,
+        logger=logger
     )
     return Trainer
 
@@ -257,10 +258,10 @@ def get_dataset(cfg, is_train=True):
     module = importlib.import_module(cfg.DATASET.FILE)
     Dataset = getattr(module, cfg.DATASET.NAME)
     data_root = cfg.DATASET.ROOT # abs path in yaml
+    img_root = cfg.DATASET.PREFIX
     if is_train == True:
         # get train data list
-        # train_root = osp.join(data_root, 'train')
-        train_root = data_root
+        train_root = osp.join(data_root, 'train')
         train_transform = TrainTransform(
             mean=cfg.DATASET.MEAN,
             std=cfg.DATASET.STD,
@@ -275,7 +276,7 @@ def get_dataset(cfg, is_train=True):
         for sub_set in train_set:
             train_sub_root = osp.join(train_root, sub_set)
             logging.info(f'==> load train sub set: {train_sub_root}')
-            train_sub_set = Dataset(train_sub_root, train_root, train_transform,
+            train_sub_set = Dataset(train_sub_root, img_root, train_transform,
                 istrain=True, max_obj=cfg.TRANSFORMER.NUM_QUERIES)
             train_list.append(train_sub_set)
         train_dataset = list_to_set(train_list, 'train')
@@ -288,8 +289,7 @@ def get_dataset(cfg, is_train=True):
             max_size=cfg.DATASET.MAX_SIZE
         )
         # get eval data list
-        # eval_root = osp.join(data_root, 'test')
-        eval_root = data_root
+        eval_root = osp.join(data_root, 'test')
         eval_set = [d for d in os.listdir(eval_root) if osp.isdir(
             osp.join(eval_root, d))]
         if len(eval_set) == 0:
@@ -298,7 +298,7 @@ def get_dataset(cfg, is_train=True):
         for sub_set in eval_set:
             eval_sub_root = osp.join(eval_root, sub_set)
             logging.info(f'==> load val sub set: {eval_sub_root}')
-            eval_sub_set = Dataset(eval_sub_root, eval_root, eval_transform,
+            eval_sub_set = Dataset(eval_sub_root, img_root, eval_transform,
                 istrain=False, max_obj=-1)
             eval_list.append(eval_sub_set)
         eval_dataset = list_to_set(eval_list, 'eval')

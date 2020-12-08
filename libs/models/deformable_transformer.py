@@ -16,8 +16,8 @@ import torch.nn.functional as F
 from torch import nn, Tensor
 from torch.nn.init import xavier_uniform_, constant_, uniform_, normal_
 
-from util.misc import inverse_sigmoid
-from models.ops.modules import MSDeformAttn
+from libs.utils.misc import inverse_sigmoid
+from libs.models.ops.modules import MSDeformAttn
 
 
 class DeformableTransformer(nn.Module):
@@ -158,7 +158,7 @@ class DeformableTransformer(nn.Module):
             output_memory, output_proposals = self.gen_encoder_output_proposals(memory, mask_flatten, spatial_shapes)
 
             # hack implementation for two-stage Deformable DETR
-            enc_outputs_class = self.decoder.class_embed[self.decoder.num_layers](output_memory)
+            enc_outputs_class = self.decoder.det_class_embed[self.decoder.num_layers](output_memory)
             enc_outputs_coord_unact = self.decoder.bbox_embed[self.decoder.num_layers](output_memory) + output_proposals
 
             topk = self.two_stage_num_proposals
@@ -320,7 +320,7 @@ class DeformableTransformerDecoder(nn.Module):
         self.return_intermediate = return_intermediate
         # hack implementation for iterative bounding box refinement and two-stage Deformable DETR
         self.bbox_embed = None
-        self.class_embed = None
+        self.det_class_embed = None
 
     def forward(self, tgt, reference_points, src, src_spatial_shapes, src_level_start_index, src_valid_ratios,
                 query_pos=None, src_padding_mask=None):

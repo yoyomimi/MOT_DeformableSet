@@ -101,7 +101,8 @@ def main_per_worker():
     #create logger
     if proc_rank == 0:
         logger, output_dir = create_logger(cfg, proc_rank)
-
+    else:
+        logger = None
     # distribution
     if args.distributed:
         dist_url = get_ip(os.environ['SLURM_STEP_NODELIST'])
@@ -168,18 +169,26 @@ def main_per_worker():
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('number of params:', n_parameters)
 
+    def match_name_keywords(n, name_keywords):
+        out = False
+        for b in name_keywords:
+            if b in n:
+                out = True
+                break
+        return out
+
     param_dicts = [
         {
             "params":
                 [p for n, p in model_without_ddp.named_parameters()
-                 if not match_name_keywords(n, cfg.LR_BACKBONE_NAMES) and not match_name_keywords(
+                 if not match_name_keywords(n, cfg.TRAIN.LR_BACKBONE_NAMES) and not match_name_keywords(
                      n, cfg.TRAIN.LR_PROJ_NAMES) and p.requires_grad],
             "lr": cfg.TRAIN.LR,
         },
         {
             "params": [p for n, p in model_without_ddp.named_parameters() if match_name_keywords(
-                n, cfg.LR_BACKBONE_NAMES) and p.requires_grad],
-            "lr": cfg.LR_BACKBONE,
+                n, cfg.TRAIN.LR_BACKBONE_NAMES) and p.requires_grad],
+            "lr": cfg.TRAIN.LR_BACKBONE,
         },
         {
             "params": [p for n, p in model_without_ddp.named_parameters() if match_name_keywords(

@@ -1,4 +1,5 @@
 import json
+import logging
 import numpy as np
 import os
 import os.path as osp
@@ -12,7 +13,7 @@ from torch.utils.data import Dataset
 class CustomTaskDataset(Dataset):
 
     def __init__(self,
-                 data_root,
+                 anno_root,
                  img_root,
                  transform=None,
                  istrain=False,
@@ -20,20 +21,12 @@ class CustomTaskDataset(Dataset):
                  ):
         self.img_root = img_root
         self.transform = transform
-        pkl_path = f'{data_root}/pkl'
         annotations = []
-        for path in os.listdir(pkl_path):
-            if path.split('.')[-1] != 'pkl':
-                continue
-            if istrain and path.find('train') != -1:
-                annotations.extend(mmcv.load(f'{pkl_path}/{path}'))
-            elif istrain is False:
-                annotations.extend(mmcv.load(f'{pkl_path}/{path}'))
-            else:
-                continue
+        for path in os.listdir(anno_root):
+            annotations.extend(mmcv.load(f'{anno_root}/{path}'))
         self.annotations = annotations
         self.ids = []
-        self.max_objs = 100
+        self.max_objs = max_obj
         for i, anno in enumerate(self.annotations):
             if istrain is False:
                 self.ids.append(i)

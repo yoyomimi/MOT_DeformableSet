@@ -16,13 +16,11 @@ from torch import autograd
 from tensorboardX import SummaryWriter
 
 from libs.trainer.trainer import BaseTrainer
-from libs.evaluation.hico_eval import (add_One, compute_iou_mat,
-                                       compute_fptp)
+
 from libs.utils.utils import AverageMeter, save_checkpoint
 import libs.utils.misc as utils
 from libs.utils.utils import write_dict_to_json
 
-from tools.hico_eval import hico
 
 
 class DetTrainer(BaseTrainer):
@@ -40,7 +38,7 @@ class DetTrainer(BaseTrainer):
                  rank=0,
                  device='cuda',
                  max_norm=0,
-                 logger=logger):
+                 logger=None):
 
         super().__init__(cfg, model, criterion, optimizer, lr_scheduler, 
             log_dir, performance_indicator, last_iter, rank)
@@ -76,7 +74,7 @@ class DetTrainer(BaseTrainer):
         if self.epoch > self.max_epoch:
             logging.info("Optimization is done !")
             sys.exit(0)
-        for data in metric_logger.log_every(train_loader, print_freq, header):
+        for data in metric_logger.log_every(train_loader, print_freq, header, self.logger):
             data = self._read_inputs(data)
             loss_dict = self._forward(data)   
             weight_dict = self.criterion.weight_dict
@@ -93,8 +91,12 @@ class DetTrainer(BaseTrainer):
             loss_value = losses_reduced_scaled.item()
 
             if not math.isfinite(loss_value):
-                self.logger.info("Loss is {}, stopping training".format(loss_value))
-                self.logger.info(loss_dict_reduced)
+                if self.rank == 0:
+                    self.logger.info("Loss is {}, stopping training".format(loss_value))
+                    self.logger.info(loss_dict_reduced)
+                    sys.exit(1)
+                print("Loss is {}, stopping training".format(loss_value))
+                print(loss_dict_reduced)
                 sys.exit(1)
 
             self.optimizer.zero_grad()
@@ -109,7 +111,8 @@ class DetTrainer(BaseTrainer):
 
         # gather the stats from all processes
         metric_logger.synchronize_between_processes()
-        self.logger.info("Averaged stats:", metric_logger)
+        if self.rank == 0:
+            self.logger.info("Averaged stats:", metric_logger)
         train_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                      'epoch': self.epoch}
@@ -160,7 +163,8 @@ class DetTrainer(BaseTrainer):
         
         total_time = time.time() - start_time
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-        self.logger.info('Training time {}'.format(total_time_str))
+        if self.rank == 0:
+            self.logger.info('Training time {}'.format(total_time_str))
         self.epoch += 1
         
     
@@ -188,7 +192,8 @@ class DetTrainer(BaseTrainer):
             count += 1
             if count % 1000 == 0:
                 avg_t = total_time * 1.0 / 1000
-                self.logger.info(avg_t)
+                if self.rank == 0:
+                    self.logger.info(avg_t)
                 f = open('speed_log_512.txt', 'a')
                 f.writelines(f'{count}: avg time {avg_t}\n')
                 f.close()

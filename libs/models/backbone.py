@@ -19,9 +19,9 @@ from torch import nn
 from torchvision.models._utils import IntermediateLayerGetter
 from typing import Dict, List
 
-from util.misc import NestedTensor, is_main_process
+from libs.utils.misc import NestedTensor, is_main_process
 
-from .position_encoding import build_position_encoding
+from libs.models.position_encoding import build_position_encoding
 
 
 class FrozenBatchNorm2d(torch.nn.Module):
@@ -132,7 +132,7 @@ class Joiner(nn.Sequential):
 def build_backbone(cfg):
     position_embedding = build_position_encoding(cfg)
     train_backbone = cfg.TRAIN.LR_BACKBONE > 0
-    return_interm_layers = cfg.MODEL.MASKS
+    return_interm_layers = True
     backbone = Backbone(cfg.BACKBONE.NAME, train_backbone, return_interm_layers,
         cfg.BACKBONE.DIALATION)
     model = Joiner(backbone, position_embedding)

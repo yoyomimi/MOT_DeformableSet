@@ -1,4 +1,4 @@
-OUTPUT_ROOT: deformable_det
+OUTPUT_ROOT: deformable_det_less
 DIST_BACKEND: 'nccl'
 WORKERS: 4
 DEVICE: cuda
@@ -6,13 +6,14 @@ SEED: 42
 DATASET:
   FILE: customtask
   NAME: CustomTaskDataset
-  ROOT: '/mnt/lustre/share/lindelv/data/mot'
+  ROOT: 'data/mot_pkl'
   MEAN: [0.485, 0.456, 0.406]
   STD: [0.229, 0.224, 0.225]
-  IMG_NUM_PER_GPU: 2
+  IMG_NUM_PER_GPU: 1
   NUM_CLASSES: 2 # id 加 1
   MAX_SIZE: 1333 #1333
   SCALES: [608, 640, 672, 704, 736, 768, 800]
+  PREFIX: '/mnt/lustre/share/lindelv/data/mot'
 MODEL:
   FILE: deformable_detr
   NAME: DeformableDETR
@@ -29,10 +30,10 @@ TRANSFORMER:
   HIDDEN_DIM: 256
   ENC_LAYERS: 6
   DEC_LAYERS: 6
-  DIM_FEEDFORWARD: 2048
+  DIM_FEEDFORWARD: 1024
   DROPOUT: 0.1
   NHEADS: 8
-  NUM_QUERIES: 150
+  NUM_QUERIES: 300
   DEC_N_POINTS: 4
   ENC_N_POINTS: 4
   PRE_NORM: False
@@ -58,10 +59,10 @@ TRAIN:
   LR_PROJ_NAMES: ['reference_points', 'sampling_offsets']
   MOMENTUM: 0.9
   WEIGHT_DECAY: 0.0001
-  LR_DROP: 40
-  MAX_EPOCH: 50
+  LR_DROP: 8 #40
+  MAX_EPOCH: 12 #50
   PRINT_FREQ: 20
-  SAVE_INTERVAL: 5
+  SAVE_INTERVAL: 1 #5
   SAVE_EVERY_CHECKPOINT: True
   VAL_WHEN_TRAIN: False
   CLIP_MAX_NORM: 0.1
