@@ -6,7 +6,7 @@ SEED: 42
 DATASET:
   FILE: customtask
   NAME: CustomTaskDataset
-  ROOT: 'data/'
+  ROOT: '/mnt/lustre/share/lindelv/data/mot'
   MEAN: [0.485, 0.456, 0.406]
   STD: [0.229, 0.224, 0.225]
   IMG_NUM_PER_GPU: 2
@@ -16,13 +16,13 @@ DATASET:
 MODEL:
   FILE: deformable_detr
   NAME: DeformableDETR
-  RESUME_PATH: 'data/crowd_r50_300.pth'
+  RESUME_PATH: 'data/r50_deformable_detr_plus_iterative_bbox_refinement_plus_plus_two_stage-checkpoint.pth'
 BACKBONE:
   NAME: resnet50
   DIALATION: False
 DEFORMABLE:
   WITH_BOX_REFINE: True
-  TWO_STAGE: False
+  TWO_STAGE: True
 TRANSFORMER:
   POSITION_EMBEDDING: sine # choices=('sine', 'learned')
   NUM_FEATURE_LEVELS: 4 
