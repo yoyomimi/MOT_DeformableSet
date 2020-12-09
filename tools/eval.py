@@ -105,6 +105,8 @@ def main_per_worker():
     #create logger
     if proc_rank == 0:
         logger, output_dir = create_logger(cfg, proc_rank)
+    else:
+        logger = None
     # logger.info(pprint.pformat(args))
     # logger.info(cfg)
 
@@ -133,7 +135,7 @@ def main_per_worker():
             model, device_ids=[local_rank], output_device=local_rank,
             find_unused_parameters=True
         )
-        _, eval_dataset = get_dataset(cfg)
+        _, eval_dataset = get_dataset(cfg, is_train=False)
         batch_size = cfg.DATASET.IMG_NUM_PER_GPU
 
     else:
@@ -144,7 +146,7 @@ def main_per_worker():
         device = torch.device(cfg.DEVICE)
         model, criterion, postprocessors = get_model(cfg, device)  
         model = torch.nn.DataParallel(model).to(device)
-        _, eval_dataset = get_dataset(cfg)
+        _, eval_dataset = get_dataset(cfg, is_train=False)
         if ngpus_per_node == 0:
             batch_size = cfg.DATASET.IMG_NUM_PER_GPU
         else:
@@ -153,16 +155,6 @@ def main_per_worker():
     model_without_ddp = model.module
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('number of params:', n_parameters)
-
-    param_dicts = [
-        {"params": [p for n, p in model_without_ddp.named_parameters()
-                        if "backbone" not in n and p.requires_grad]},
-        {
-            "params": [p for n, p in model_without_ddp.named_parameters()
-                        if "backbone" in n and p.requires_grad],
-            "lr": cfg.TRAIN.LR_BACKBONE,
-        },
-    ]
 
     resume_path = cfg.MODEL.RESUME_PATH
     if os.path.exists(resume_path):
@@ -194,11 +186,12 @@ def main_per_worker():
         last_iter=-1,
         rank=proc_rank,
         device=device,
-        max_norm=None
+        max_norm=None,
+        logger=logger
     )
 
     print('start eval...')
-    Trainer.evaluate(eval_loader)
+    Trainer.evaluate(eval_loader, cfg.DATASET.NUM_CLASSES, threshold=0.12)
 
 
 if __name__ == '__main__':

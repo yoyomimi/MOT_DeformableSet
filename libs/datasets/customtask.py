@@ -70,7 +70,7 @@ class CustomTaskDataset(Dataset):
         target = dict(
             boxes=boxes,
             labels=labels,
-            sizes=torch.from_numpy(np.array([h, w]))
+            sizes=torch.from_numpy(np.array([h, w])),
         )
 
         if self.transform is not None:

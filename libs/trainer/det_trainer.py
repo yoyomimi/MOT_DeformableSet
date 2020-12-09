@@ -11,12 +11,15 @@ import sys
 import time
 from tqdm import tqdm
 
+import mmcv
+
 import torch
 from torch import autograd
 from tensorboardX import SummaryWriter
 
+from libs.evaluation.mean_ap import eval_map
 from libs.trainer.trainer import BaseTrainer
-
+from libs.utils.box_ops import box_cxcywh_to_xyxy
 from libs.utils.utils import AverageMeter, save_checkpoint
 import libs.utils.misc as utils
 from libs.utils.utils import write_dict_to_json
@@ -168,11 +171,12 @@ class DetTrainer(BaseTrainer):
         self.epoch += 1
         
     
-    def evaluate(self, eval_loader, rel_topk=100):
+    def evaluate(self, eval_loader, num_classes, threshold=0.27):
         self.model.eval()
-        results = []
+        det_results = []
+        annotations = []
+        results_dict = {}
         count = 0
-        total_time = 0
         for data in tqdm(eval_loader):
             imgs, targets, filenames = data
             imgs = [img.to(self.device) for img in imgs]
@@ -183,18 +187,47 @@ class DetTrainer(BaseTrainer):
             # target_sizes = torch.tensor([h, w]).expand(bs, 2)
             target_sizes = targets[0]['size'].expand(bs, 2)
             target_sizes = target_sizes.to(self.device)
-            start_time = time.time()
             outputs_dict = self.model(imgs)
             file_name = filenames[0]
-            pred_out = self.postprocessors(outputs_dict, file_name, target_sizes, rel_topk=rel_topk)
-            total_time += self.postprocessors.end_time - start_time
-            results.append(pred_out)
-            count += 1
-            if count % 1000 == 0:
-                avg_t = total_time * 1.0 / 1000
-                if self.rank == 0:
-                    self.logger.info(avg_t)
-                f = open('speed_log_512.txt', 'a')
-                f.writelines(f'{count}: avg time {avg_t}\n')
-                f.close()
-                total_time = 0
+            pred_out = self.postprocessors(outputs_dict, file_name, target_sizes)
+
+            for level, res in enumerate(pred_out):
+                results_dict.setdefault(level, [])
+                valid_inds = torch.where(res['scores']>threshold)[0]
+                boxes = res['boxes'][valid_inds].clamp(
+                    min=0)
+                labels = res['labels'][valid_inds]
+                scores = res['scores'][valid_inds]
+                det_boxes = []
+                for i in range(1, num_classes):
+                    valid_id = torch.where(labels==i)[0]
+                    keep = nms(boxes[valid_id], scores[valid_id], 0.5)
+                    boxes = boxes[valid_id][keep].reshape(
+                        -1, 4).data.cpu().numpy()
+                    scores = scores[valid_id][keep].reshape(
+                        -1, 1).data.cpu().numpy()
+                    valid_det_res = np.hstack([boxes, scores])
+                    det_boxes.append(valid_det_res)
+                results_dict[level].append(det_boxes)
+            
+            target = targets[0]
+            labels = target['labels'].reshape(-1, )
+            img_h, img_w = target['size']
+            scale_fct = np.array([img_w, img_h, img_w, img_h])
+            boxes = box_cxcywh_to_xyxy(target['boxes'])
+            boxes = boxes.clamp(min=0).reshape(-1, 4)
+            anno = {
+                'bboxes': boxes.data.cpu().numpy() * scale_fct,
+                'labels': labels.data.cpu().numpy()-1,
+                'bboxes_ignore': np.array([]).reshape(-1, 4),
+                'labels_ignore': np.array([]).reshape(-1, )
+            }
+            annotations.append(anno)
+            det_results.append(pred_out)
+            
+        mmcv.dump(det_results, 'data/det_results.pkl')
+        mmcv.dump(annotations, 'data/test_annos.pkl')
+        
+        # for i in results_dict.keys():
+        #     det_results = results_dict[i]
+        #     eval_map(det_results, annotations, i, iou_thr=0.5, nproc=4)

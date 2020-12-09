@@ -384,7 +384,7 @@ class PostProcess(nn.Module):
     """ This module converts the model's output into the format expected by the coco api"""
 
     @torch.no_grad()
-    def forward(self, outputs, target_sizes):
+    def forward(self, outputs, filename, target_sizes):
         """ Perform the computation
         Parameters:
             outputs: raw outputs of the model
@@ -410,7 +410,9 @@ class PostProcess(nn.Module):
         scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
         boxes = boxes * scale_fct[:, None, :]
 
-        results = [{'scores': s, 'labels': l, 'boxes': b} for s, l, b in zip(scores, labels, boxes)]
+        filenames = [filename] * len(scores)
+        results = [{'filename': f, 'scores': s, 'labels': l, 'boxes': b} for f, s, l, b in zip(
+            filenames, scores, labels, boxes)]
 
         return results
 
