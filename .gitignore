@@ -131,3 +131,4 @@ dmypy.json
 data/
 output/
 work_dirs/
+test_out/

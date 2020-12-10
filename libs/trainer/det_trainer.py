@@ -15,6 +15,7 @@ import mmcv
 
 import torch
 from torch import autograd
+from torchvision.ops import nms
 from tensorboardX import SummaryWriter
 
 from libs.evaluation.mean_ap import eval_map
@@ -171,7 +172,7 @@ class DetTrainer(BaseTrainer):
         self.epoch += 1
         
     
-    def evaluate(self, eval_loader, num_classes, threshold=0.27):
+    def evaluate(self, eval_loader, num_classes, threshold=0.05):
         self.model.eval()
         det_results = []
         annotations = []
@@ -191,24 +192,24 @@ class DetTrainer(BaseTrainer):
             file_name = filenames[0]
             pred_out = self.postprocessors(outputs_dict, file_name, target_sizes)
 
-            for level, res in enumerate(pred_out):
-                results_dict.setdefault(level, [])
-                valid_inds = torch.where(res['scores']>threshold)[0]
-                boxes = res['boxes'][valid_inds].clamp(
-                    min=0)
-                labels = res['labels'][valid_inds]
-                scores = res['scores'][valid_inds]
-                det_boxes = []
-                for i in range(1, num_classes):
-                    valid_id = torch.where(labels==i)[0]
-                    keep = nms(boxes[valid_id], scores[valid_id], 0.5)
-                    boxes = boxes[valid_id][keep].reshape(
-                        -1, 4).data.cpu().numpy()
-                    scores = scores[valid_id][keep].reshape(
-                        -1, 1).data.cpu().numpy()
-                    valid_det_res = np.hstack([boxes, scores])
-                    det_boxes.append(valid_det_res)
-                results_dict[level].append(det_boxes)
+            # for level, res in enumerate(pred_out):
+            #     results_dict.setdefault(level, [])
+            #     valid_inds = torch.where(res['scores']>threshold)[0]
+            #     boxes = res['boxes'][valid_inds].clamp(
+            #         min=0)
+            #     labels = res['labels'][valid_inds]
+            #     scores = res['scores'][valid_inds]
+            #     det_boxes = []
+            #     for i in range(1, num_classes):
+            #         valid_id = torch.where(labels==i)[0]
+            #         keep = nms(boxes[valid_id], scores[valid_id], 0.5)
+            #         boxes = boxes[valid_id][keep].reshape(
+            #             -1, 4).data.cpu().numpy()
+            #         scores = scores[valid_id][keep].reshape(
+            #             -1, 1).data.cpu().numpy()
+            #         valid_det_res = np.hstack([boxes, scores])
+            #         det_boxes.append(valid_det_res)
+            #     results_dict[level].append(det_boxes)
             
             target = targets[0]
             labels = target['labels'].reshape(-1, )
@@ -225,7 +226,7 @@ class DetTrainer(BaseTrainer):
             annotations.append(anno)
             det_results.append(pred_out)
             
-        mmcv.dump(det_results, 'data/det_results.pkl')
+        mmcv.dump(det_results, 'data/det_results_more_epoch30.pkl')
         mmcv.dump(annotations, 'data/test_annos.pkl')
         
         # for i in results_dict.keys():

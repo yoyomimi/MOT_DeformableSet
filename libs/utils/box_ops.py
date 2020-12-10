@@ -258,6 +258,7 @@ def hard_nms(box_scores, iou_threshold=0.5, top_k=-1, candidate_size=200, return
     boxes = box_scores[:, :-1]
     picked = []
     _, indexes = scores.sort(descending=True)
+    candidate_size = min(candidate_size, len(indexes))
     indexes = indexes[:candidate_size]  
     while len(indexes) > 0:
         current = indexes[0]
