@@ -1,23 +1,23 @@
 OUTPUT_ROOT: deformable_debug
 DIST_BACKEND: 'nccl'
-WORKERS: 4
+WORKERS: 0
 DEVICE: cuda
 SEED: 42
 DATASET:
-  FILE: customtask
-  NAME: CustomTaskDataset
-  ROOT: 'data/mot_pkl'
+  FILE: basetrack
+  NAME: BaseTrackDataset
+  ROOT: 'data/MOT17'
   MEAN: [0.485, 0.456, 0.406]
   STD: [0.229, 0.224, 0.225]
   IMG_NUM_PER_GPU: 1
   NUM_CLASSES: 2 # id 加 1
   MAX_SIZE: 1333 #1333
   SCALES: [608, 640, 672, 704, 736, 768, 800]
-  PREFIX: '/mnt/lustre/share/lindelv/data/mot'
+  PREFIX: ''
 MODEL:
   FILE: deformable_detr
   NAME: DeformableDETR
-  RESUME_PATH: 'data/r50_deformable_detr_plus_iterative_bbox_refinement_plus_plus_two_stage-checkpoint.pth'
+  RESUME_PATH: 'output/deformable_det_more_DeformableDETR_epoch050_checkpoint.pth'
 BACKBONE:
   NAME: resnet50
   DIALATION: False

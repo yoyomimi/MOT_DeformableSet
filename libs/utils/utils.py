@@ -268,10 +268,11 @@ def get_dataset(cfg, is_train=True):
             scales=cfg.DATASET.SCALES,
             max_size=cfg.DATASET.MAX_SIZE
         )
-        train_set = [d for d in os.listdir(train_root) if osp.isdir(
-            osp.join(train_root, d))]  
-        if len(train_set) == 0:
-            train_set = ['.']
+        # train_set = [d for d in os.listdir(train_root) if osp.isdir(
+        #     osp.join(train_root, d))]  
+        # if len(train_set) == 0:
+        #     train_set = ['.']
+        train_set = ['.']
         train_list = []
         for sub_set in train_set:
             train_sub_root = osp.join(train_root, sub_set)
@@ -290,10 +291,11 @@ def get_dataset(cfg, is_train=True):
         )
         # get eval data list
         eval_root = osp.join(data_root, 'test')
-        eval_set = [d for d in os.listdir(eval_root) if osp.isdir(
-            osp.join(eval_root, d))]
-        if len(eval_set) == 0:
-            eval_set = ['.']
+        # eval_set = [d for d in os.listdir(eval_root) if osp.isdir(
+        #     osp.join(eval_root, d))]
+        # if len(eval_set) == 0:
+        #     eval_set = ['.']
+        eval_set = ['.']
         eval_list = []      
         for sub_set in eval_set:
             eval_sub_root = osp.join(eval_root, sub_set)

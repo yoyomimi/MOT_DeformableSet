@@ -87,7 +87,7 @@ def process_img(img_path, model, postprocessors, device, threshold=0.12):
     valid_id = torch.where(labels==1)[0]
     boxes_with_scores = torch.cat([boxes[valid_id].reshape(
         -1, 4), scores[valid_id].reshape(-1, 1)], dim=1)
-    keep = hard_nms(boxes_with_scores, 0.7, return_pick=True)
+    keep = hard_nms(boxes_with_scores, 0.5, return_pick=True)
     boxes_np = boxes_with_scores[keep, :4].reshape(
         -1, 4).data.cpu().numpy()
     scores_np = boxes_with_scores[keep, -1].reshape(
@@ -105,7 +105,7 @@ def process_img(img_path, model, postprocessors, device, threshold=0.12):
 if __name__ == '__main__':
     args = parse_args()
     update_config(cfg, args)
-    resume_path = '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/output/deformable_det_more_DeformableDETR_epoch030_checkpoint.pth'
+    resume_path = '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/output/deformable_det_more_DeformableDETR_epoch050_checkpoint.pth'
     device = torch.device(cfg.DEVICE)
     model, criterion, postprocessors = get_model(cfg, device)  
     model.to(device)
