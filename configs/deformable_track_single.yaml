@@ -1,6 +1,6 @@
-OUTPUT_ROOT: deformable_debug
+OUTPUT_ROOT: deformable_mot_step2
 DIST_BACKEND: 'nccl'
-WORKERS: 0
+WORKERS: 4
 DEVICE: cuda
 SEED: 42
 DATASET:
@@ -15,8 +15,8 @@ DATASET:
   SCALES: [608, 640, 672, 704, 736, 768, 800]
   PREFIX: ''
 MODEL:
-  FILE: deformable_detr
-  NAME: DeformableDETR
+  FILE: deformable_bastrack
+  NAME: DeformableBaseTrack
   RESUME_PATH: 'output/deformable_det_more_DeformableDETR_epoch050_checkpoint.pth'
 BACKBONE:
   NAME: resnet50
@@ -44,6 +44,8 @@ MATCHER:
 LOSS: 
   AUX_LOSS: True
   DICE_LOSS_COEF: 1
+  ID_LOSS_COEF: 0.5
+  OFFSET_LOSS_COEF: 5
   CLS_LOSS_COEF: 2
   BBOX_LOSS_COEF: 5
   GIOU_LOSS_COEF: 2
@@ -59,8 +61,8 @@ TRAIN:
   LR_PROJ_NAMES: ['reference_points', 'sampling_offsets']
   MOMENTUM: 0.9
   WEIGHT_DECAY: 0.0001
-  LR_DROP: 40 #40
-  MAX_EPOCH: 50 #50
+  LR_DROP: 20 #40
+  MAX_EPOCH: 30 #50
   PRINT_FREQ: 20
   SAVE_INTERVAL: 5 #5
   SAVE_EVERY_CHECKPOINT: True

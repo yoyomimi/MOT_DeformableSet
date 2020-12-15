@@ -72,6 +72,7 @@ class DetTrainer(BaseTrainer):
         metric_logger = utils.MetricLogger(delimiter="  ")
         metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
         metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
+        metric_logger.add_meter('id_class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
         header = 'Epoch: [{}]'.format(self.epoch)
         print_freq = self.cfg.TRAIN.PRINT_FREQ
 
@@ -111,6 +112,7 @@ class DetTrainer(BaseTrainer):
 
             metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled)
             metric_logger.update(class_error=loss_dict_reduced['class_error'])
+            metric_logger.update(id_class_error=loss_dict_reduced['id_class_error'])
             metric_logger.update(lr=self.optimizer.param_groups[0]["lr"])
 
         # gather the stats from all processes

@@ -190,7 +190,7 @@ class BaseTrackDataset(Dataset):
         out_target = dict(
             boxes=target['boxes'],
             ids=target['ids'],
-            offsets=next_target['boxes'][..., :2]-target['boxes'][..., :2],
+            next_centers=next_target['boxes'][..., :2],
             labels=target['labels'],
             vis_ratios=target['vis_ratios'],
             next_vis_ratios=next_target['vis_ratios'],

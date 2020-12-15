@@ -160,7 +160,9 @@ class DeformableTransformer(nn.Module):
             # hack implementation for two-stage Deformable DETR
             enc_outputs_class = self.decoder.det_class_embed[self.decoder.num_layers](output_memory)
             enc_outputs_coord_unact = self.decoder.bbox_embed[self.decoder.num_layers](output_memory) + output_proposals
-
+            ###### modified ##########
+            enc_outputs_id_embeds = self.decoder.id_embed[self.decoder.num_layers](output_memory)
+            ##########################
             topk = self.two_stage_num_proposals
             topk_proposals = torch.topk(enc_outputs_class[..., 0], topk, dim=1)[1]
             topk_coords_unact = torch.gather(enc_outputs_coord_unact, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, 4))
@@ -182,8 +184,8 @@ class DeformableTransformer(nn.Module):
 
         inter_references_out = inter_references
         if self.two_stage:
-            return hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact
-        return hs, init_reference_out, inter_references_out, None, None
+            return hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact, enc_outputs_id_embeds
+        return hs, init_reference_out, inter_references_out, None, None, None
 
 
 class DeformableTransformerEncoderLayer(nn.Module):
@@ -321,6 +323,7 @@ class DeformableTransformerDecoder(nn.Module):
         # hack implementation for iterative bounding box refinement and two-stage Deformable DETR
         self.bbox_embed = None
         self.det_class_embed = None
+        self.id_embed = None
 
     def forward(self, tgt, reference_points, src, src_spatial_shapes, src_level_start_index, src_valid_ratios,
                 query_pos=None, src_padding_mask=None):
