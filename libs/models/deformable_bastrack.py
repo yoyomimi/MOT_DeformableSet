@@ -29,7 +29,7 @@ import copy
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
-def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2):
+def sigmoid_focal_loss(inputs, targets, num_boxes=None, reduction='mean', alpha: float = 0.25, gamma: float = 2,):
     """
     Loss used in RetinaNet for dense detection: https://arxiv.org/abs/1708.02002.
     Args:
@@ -53,8 +53,12 @@ def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: f
     if alpha >= 0:
         alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
         loss = alpha_t * loss
-
-    return loss.mean(1).sum() / num_boxes
+    if reduction == 'mean':
+        return loss.mean(1).sum() / num_boxes
+    elif reduction == 'sum':
+        return loss.sum()
+    else:
+        return loss.mean()
 
 
 class DeformableBaseTrack(nn.Module):
@@ -78,8 +82,8 @@ class DeformableBaseTrack(nn.Module):
         self.det_class_embed = nn.Linear(hidden_dim, num_classes)
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
         ###### modified ##########
-        self.id_embed =  MLP(hidden_dim, hidden_dim, 64, 3)
-        self.offset_embed = MLP(hidden_dim, hidden_dim, 2, 3)
+        self.id_embed =  MLP(hidden_dim, hidden_dim, 128, 3)
+        # self.offset_embed = MLP(hidden_dim, hidden_dim, 2, 3)
         ##########################
         self.num_feature_levels = num_feature_levels
         if not two_stage:
@@ -127,20 +131,20 @@ class DeformableBaseTrack(nn.Module):
             self.bbox_embed = _get_clones(self.bbox_embed, num_pred)
             ###### modified ##########
             self.id_embed =  _get_clones(self.id_embed, num_pred)
-            self.offset_embed = _get_clones(self.offset_embed, transformer.decoder.num_layers)
-            nn.init.constant_(self.offset_embed[0].layers[-1].bias.data[2:], -2.0)
+            # self.offset_embed = _get_clones(self.offset_embed, transformer.decoder.num_layers)
+            # nn.init.constant_(self.offset_embed[0].layers[-1].bias.data[2:], -2.0)
             ##########################
             nn.init.constant_(self.bbox_embed[0].layers[-1].bias.data[2:], -2.0)
             # hack implementation for iterative bounding box refinement
             self.transformer.decoder.bbox_embed = self.bbox_embed
         else:
             nn.init.constant_(self.bbox_embed.layers[-1].bias.data[2:], -2.0)
-            nn.init.constant_(self.offset_embed.layers[-1].bias.data[2:], -2.0)
+            # nn.init.constant_(self.offset_embed.layers[-1].bias.data[2:], -2.0)
             self.det_class_embed = nn.ModuleList([self.det_class_embed for _ in range(num_pred)])
             self.bbox_embed = nn.ModuleList([self.bbox_embed for _ in range(num_pred)])
             ###### modified ##########
             self.id_embed =  nn.ModuleList([self.id_embed for _ in range(num_pred)])
-            self.offset_embed = nn.ModuleList([self.offset_embed for _ in range(transformer.decoder.num_layers)])
+            # self.offset_embed = nn.ModuleList([self.offset_embed for _ in range(transformer.decoder.num_layers)])
             ##########################
             self.transformer.decoder.bbox_embed = None
         if two_stage:
@@ -148,8 +152,8 @@ class DeformableBaseTrack(nn.Module):
             self.transformer.decoder.det_class_embed = self.det_class_embed
             ###### modified ##########
             self.transformer.decoder.id_embed =  self.id_embed
-            for offset_embed in self.offset_embed:
-                nn.init.constant_(offset_embed.layers[-1].bias.data[2:], 0.0)
+            # for offset_embed in self.offset_embed:
+            #     nn.init.constant_(offset_embed.layers[-1].bias.data[2:], 0.0)
             ##########################
             for box_embed in self.bbox_embed:
                 nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
@@ -212,49 +216,49 @@ class DeformableBaseTrack(nn.Module):
             outputs_class = self.det_class_embed[lvl](hs[lvl])
             ###### modified ##########
             outputs_id_embed = self.id_embed[lvl](hs[lvl])
-            next_center_tmp = self.offset_embed[lvl](hs[lvl])
+            # next_center_tmp = self.offset_embed[lvl](hs[lvl])
             ##########################
             tmp = self.bbox_embed[lvl](hs[lvl])
             if reference.shape[-1] == 4:
                 tmp += reference
-                next_center_tmp += reference[..., :2]
+                # next_center_tmp += reference[..., :2]
             else:
                 assert reference.shape[-1] == 2
                 tmp[..., :2] += reference
-                next_center_tmp += reference
+                # next_center_tmp += reference
             outputs_coord = tmp.sigmoid()
-            outputs_next_center = next_center_tmp.sigmoid()
+            # outputs_next_center = next_center_tmp.sigmoid()
 
             outputs_classes.append(outputs_class)
             outputs_coords.append(outputs_coord)
             outputs_id_embeds.append(outputs_id_embed)
-            outputs_next_centers.append(outputs_next_center)
+            # outputs_next_centers.append(outputs_next_center)
         outputs_class = torch.stack(outputs_classes)
         outputs_coord = torch.stack(outputs_coords)
         outputs_id_embed = torch.stack(outputs_id_embeds)
-        outputs_next_center = torch.stack(outputs_next_centers)
+        # outputs_next_center = torch.stack(outputs_next_centers)
 
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
-               'id_embeds': outputs_id_embed[-1], 'next_cenetrs': outputs_next_center[-1]}
+               'id_embeds': outputs_id_embed[-1], 
+            #    'next_cenetrs': outputs_next_center[-1]
+               }
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord,
-                outputs_id_embed, outputs_next_center)
+                outputs_id_embed)
 
         if self.two_stage:
             enc_outputs_coord = enc_outputs_coord_unact.sigmoid()
-            enc_outputs_id_embeds
             out['enc_outputs'] = {'pred_logits': enc_outputs_class, 'pred_boxes': enc_outputs_coord,
-                                  'id_embeds': enc_outputs_id_embeds, 'next_cenetrs': None}
+                                  'id_embeds': enc_outputs_id_embeds}
         return out
 
     @torch.jit.unused
-    def _set_aux_loss(self, outputs_class, outputs_coord, outputs_id_embed, outputs_next_center):
+    def _set_aux_loss(self, outputs_class, outputs_coord, outputs_id_embed):
         # this is a workaround to make torchscript happy, as torchscript
         # doesn't support dictionary with non-homogeneous values, such
         # as a dict having both a Tensor and a list.
-        return [{'pred_logits': a, 'pred_boxes': b, 'id_embeds': c, 'next_cenetrs': d}
-                for a, b, c, d in zip(outputs_class[:-1], outputs_coord[:-1], outputs_id_embed[:-1],
-                    outputs_next_center[:-1])]
+        return [{'pred_logits': a, 'pred_boxes': b, 'id_embeds': c}
+                for a, b, c in zip(outputs_class[:-1], outputs_coord[:-1], outputs_id_embed[:-1])]
 
 
 class SetCriterion(nn.Module):
@@ -264,7 +268,7 @@ class SetCriterion(nn.Module):
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
     def __init__(self, num_classes, matcher, weight_dict, losses, focal_alpha=0.25,
-                 emb_dim=64, dataset_nids=14400):
+                 emb_dim=128, dataset_nids=13836):
         """ Create the criterion.
         Parameters:
             num_classes: number of object categories, omitting the special no-object category
@@ -337,29 +341,31 @@ class SetCriterion(nn.Module):
         target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
 
         ###### modified ##########
-        src_id_embeds = outputs['id_embeds'][idx].contiguous()
+        target_ids = torch.cat([t['ids'][i] for t, (_, i) in zip(targets, indices)], dim=0).long()
+        valids_ids = torch.where(target_ids>-1)[0]
+        target_ids = target_ids[valids_ids]
+        src_id_embeds = outputs['id_embeds'][idx][valids_ids].contiguous()
         src_id_embeds = self.emb_scale * F.normalize(src_id_embeds)
         outputs_src_id_logits = self.id_head(src_id_embeds).contiguous()
-        target_ids = torch.cat([t['ids'][i] for t, (_, i) in zip(targets, indices)], dim=0).long()
         # loss_ids = self.IDLoss(outputs_src_id_logits, target_ids)
         target_ids_onehot = torch.zeros([outputs_src_id_logits.shape[0], outputs_src_id_logits.shape[1] + 1],
                                          dtype=outputs_src_id_logits.dtype, layout=outputs_src_id_logits.layout, device=outputs_src_id_logits.device)
         target_ids_onehot.scatter_(1, target_ids.unsqueeze(-1), 1)
 
         target_ids_onehot = target_ids_onehot[:,:-1]
-        loss_ids = sigmoid_focal_loss(outputs_src_id_logits, target_ids_onehot, num_boxes, alpha=self.focal_alpha, gamma=2) * num_boxes
+        loss_ids = sigmoid_focal_loss(outputs_src_id_logits, target_ids_onehot, reduction='sum', alpha=self.focal_alpha, gamma=2)
         losses = {'loss_ids': loss_ids}
         if log:
             # TODO this should probably be a separate loss, not hacked in this one here
             losses['id_class_error'] = 100 - accuracy(outputs_src_id_logits, target_ids)[0]
 
-        if outputs['next_cenetrs'] is None:
-            losses['loss_next_cenetrs'] = torch.Tensor([0.]).mean().to(outputs_src_id_logits.device)
-        else:
-            src_next_centers = outputs['next_cenetrs'][idx]
-            target_next_centers = torch.cat([t['next_centers'][i] for t, (_, i) in zip(targets, indices)], dim=0)
-            loss_next_cenetrs = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
-            losses['loss_next_cenetrs'] = loss_next_cenetrs.sum() / num_boxes
+        # if outputs['next_cenetrs'] is None:
+        #     losses['loss_next_cenetrs'] = torch.Tensor([0.]).mean().to(outputs_src_id_logits.device)
+        # else:
+        #     src_next_centers = outputs['next_cenetrs'][idx]
+        #     target_next_centers = torch.cat([t['next_centers'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+        #     loss_next_cenetrs = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
+        #     losses['loss_next_cenetrs'] = loss_next_cenetrs.sum() / num_boxes
         ##########################
 
         loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
@@ -520,7 +526,7 @@ def build_model(cfg, device):
     weight_dict = {'loss_ce': cfg.LOSS.CLS_LOSS_COEF, 'loss_bbox': cfg.LOSS.BBOX_LOSS_COEF}
     weight_dict['loss_giou'] = cfg.LOSS.GIOU_LOSS_COEF
     weight_dict['loss_ids'] = cfg.LOSS.ID_LOSS_COEF
-    weight_dict['loss_next_cenetrs'] = cfg.LOSS.OFFSET_LOSS_COEF
+    # weight_dict['loss_next_cenetrs'] = cfg.LOSS.OFFSET_LOSS_COEF
     # TODO this is a hack
     if cfg.LOSS.AUX_LOSS:
         aux_weight_dict = {}
