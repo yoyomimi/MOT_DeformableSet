@@ -58,12 +58,12 @@ def sigmoid_focal_loss(inputs, targets, num_boxes=None, reduction='mean', alpha:
     elif reduction == 'sum':
         return loss.sum()
     else:
-        return loss.mean()
+        return loss.sum()
 
 
 class DeformableBaseTrack(nn.Module):
     def __init__(self, backbone, transformer, num_classes, num_queries, num_feature_levels,
-                 aux_loss=True, with_box_refine=False, two_stage=False):
+                 emb_dim=128, dataset_nids=13837, aux_loss=True, with_box_refine=False, two_stage=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -83,6 +83,15 @@ class DeformableBaseTrack(nn.Module):
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
         ###### modified ##########
         self.id_embed =  MLP(hidden_dim, hidden_dim, 128, 3)
+        self.nID = dataset_nids
+        self.emb_dim = emb_dim
+        self.id_head = nn.Linear(self.emb_dim, self.nID)
+        nn.init.normal_(self.id_head.weight, std=0.01)
+        prior_prob = 0.01
+        bias_value = -math.log((1 - prior_prob) / prior_prob)
+        nn.init.constant_(self.id_head.bias, bias_value)
+        # self.IDLoss = nn.CrossEntropyLoss(ignore_index=-1)
+        self.emb_scale = math.sqrt(2) * math.log(self.nID - 1)
         # self.offset_embed = MLP(hidden_dim, hidden_dim, 2, 3)
         ##########################
         self.num_feature_levels = num_feature_levels
@@ -202,6 +211,9 @@ class DeformableBaseTrack(nn.Module):
         if not self.two_stage:
             query_embeds = self.query_embed.weight
         hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact, enc_outputs_id_embeds = self.transformer(srcs, masks, pos, query_embeds)
+        enc_outputs_id_embeds = self.emb_scale * F.normalize(enc_outputs_id_embeds)
+        enc_outputs_id_embeds = self.id_head(enc_outputs_id_embeds.contiguous())
+
 
         outputs_classes = []
         outputs_coords = []
@@ -216,6 +228,8 @@ class DeformableBaseTrack(nn.Module):
             outputs_class = self.det_class_embed[lvl](hs[lvl])
             ###### modified ##########
             outputs_id_embed = self.id_embed[lvl](hs[lvl])
+            outputs_id_embed = self.emb_scale * F.normalize(outputs_id_embed)
+            outputs_id_embed = self.id_head(outputs_id_embed.contiguous())
             # next_center_tmp = self.offset_embed[lvl](hs[lvl])
             ##########################
             tmp = self.bbox_embed[lvl](hs[lvl])
@@ -267,8 +281,7 @@ class SetCriterion(nn.Module):
         1) we compute hungarian assignment between ground truth boxes and the outputs of the model
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
-    def __init__(self, num_classes, matcher, weight_dict, losses, focal_alpha=0.25,
-                 emb_dim=128, dataset_nids=13836):
+    def __init__(self, num_classes, matcher, weight_dict, losses, focal_alpha=0.25):
         """ Create the criterion.
         Parameters:
             num_classes: number of object categories, omitting the special no-object category
@@ -283,12 +296,7 @@ class SetCriterion(nn.Module):
         self.weight_dict = weight_dict
         self.losses = losses
         self.focal_alpha = focal_alpha
-        self.nID = dataset_nids
-        self.emb_dim = emb_dim
-        self.id_head = nn.Linear(self.emb_dim, self.nID)
-        self.IDLoss = nn.CrossEntropyLoss(ignore_index=-1)
-        self.emb_scale = math.sqrt(2) * math.log(self.nID - 1)
-
+        
     def loss_labels(self, outputs, targets, indices, num_boxes, log=True):
         """Classification loss (NLL)
         targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
@@ -344,16 +352,14 @@ class SetCriterion(nn.Module):
         target_ids = torch.cat([t['ids'][i] for t, (_, i) in zip(targets, indices)], dim=0).long()
         valids_ids = torch.where(target_ids>-1)[0]
         target_ids = target_ids[valids_ids]
-        src_id_embeds = outputs['id_embeds'][idx][valids_ids].contiguous()
-        src_id_embeds = self.emb_scale * F.normalize(src_id_embeds)
-        outputs_src_id_logits = self.id_head(src_id_embeds).contiguous()
+        outputs_src_id_logits = outputs['id_embeds'][idx][valids_ids].contiguous()
         # loss_ids = self.IDLoss(outputs_src_id_logits, target_ids)
         target_ids_onehot = torch.zeros([outputs_src_id_logits.shape[0], outputs_src_id_logits.shape[1] + 1],
-                                         dtype=outputs_src_id_logits.dtype, layout=outputs_src_id_logits.layout, device=outputs_src_id_logits.device)
+                                        dtype=outputs_src_id_logits.dtype, layout=outputs_src_id_logits.layout, device=outputs_src_id_logits.device)
         target_ids_onehot.scatter_(1, target_ids.unsqueeze(-1), 1)
 
         target_ids_onehot = target_ids_onehot[:,:-1]
-        loss_ids = sigmoid_focal_loss(outputs_src_id_logits, target_ids_onehot, reduction='sum', alpha=self.focal_alpha, gamma=2)
+        loss_ids = sigmoid_focal_loss(outputs_src_id_logits, target_ids_onehot, reduction='sum', alpha=self.focal_alpha, gamma=2) / max(1, outputs_src_id_logits.shape[0])
         losses = {'loss_ids': loss_ids}
         if log:
             # TODO this should probably be a separate loss, not hacked in this one here

@@ -43,6 +43,10 @@ class CustomTaskDataset(Dataset):
                 anno['ann']['extra_anns'][anno['ann']['extra_anns']>-1] += id_base
                 for single_id in anno['ann']['extra_anns']:
                     id_set.add(single_id)
+
+            if len(np.where(anno['ann']['extra_anns']>-1)[0]) < 1:
+                continue
+            
             if istrain is False:
                 self.ids.append(i)
             else:
@@ -53,7 +57,6 @@ class CustomTaskDataset(Dataset):
                      labels.sum()==len(labels)):
                     self.ids.append(i)
         id_base = id_base + max_id + 1 
-        print(len(id_set), max_id, id_base)
         
     def __len__(self):
         return len(self.ids)
