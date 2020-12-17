@@ -1,4 +1,4 @@
-OUTPUT_ROOT: deformable_step2
+OUTPUT_ROOT: deformable_motid_more
 DIST_BACKEND: 'nccl'
 WORKERS: 4
 DEVICE: cuda
@@ -17,8 +17,8 @@ DATASET:
 MODEL:
   FILE: deformable_bastrack
   NAME: DeformableBaseTrack
-  # RESUME_PATH: 'data/r50_deformable_detr_plus_iterative_bbox_refinement_plus_plus_two_stage-checkpoint.pth'
-  RESUME_PATH: 'output/deformable_det_more_DeformableDETR_epoch050_checkpoint.pth'
+  RESUME_PATH: 'data/r50_deformable_detr_plus_iterative_bbox_refinement_plus_plus_two_stage-checkpoint.pth'
+  # RESUME_PATH: 'output/deformable_det_more_DeformableDETR_epoch050_checkpoint.pth'
 BACKBONE:
   NAME: resnet50
   DIALATION: False
@@ -62,8 +62,8 @@ TRAIN:
   LR_PROJ_NAMES: ['reference_points', 'sampling_offsets']
   MOMENTUM: 0.9
   WEIGHT_DECAY: 0.0001
-  LR_DROP: 25 #40
-  MAX_EPOCH: 40 #50
+  LR_DROP: 40 #40
+  MAX_EPOCH: 70 #50
   PRINT_FREQ: 20
   SAVE_INTERVAL: 5 #5
   SAVE_EVERY_CHECKPOINT: True

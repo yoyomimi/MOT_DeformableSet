@@ -44,8 +44,8 @@ class CustomTaskDataset(Dataset):
                 for single_id in anno['ann']['extra_anns']:
                     id_set.add(single_id)
 
-            if len(np.where(anno['ann']['extra_anns']>-1)[0]) < 1:
-                continue
+            # if len(np.where(anno['ann']['extra_anns']>-1)[0]) < 1:
+            #     continue
             
             if istrain is False:
                 self.ids.append(i)
