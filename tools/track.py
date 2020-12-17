@@ -87,7 +87,7 @@ def read_img(img_path):
     image = F_trans.normalize(image, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     return image
 
-def process_img(img_path, model, postprocessors, device, threshold=0.2,  
+def process_img(img_path, model, postprocessors, device, threshold=0.35,  
                 nms_threshold=0.5):
     model.eval()
     ori_img = cv2.imread(img_path, cv2.IMREAD_COLOR)
@@ -292,7 +292,7 @@ def main(data_root='/data/MOT16/train', seqs=('MOT16-05',), exp_name='demo',
             output_dir = osp.join(result_root, seq) if save_images or save_videos else None
             result_filename = osp.join(result_root, '{}.txt'.format(seq))
             logger.info('start seq: {}'.format(seq))
-            if not osp.exists(output_dir):
+            if output_dir is not None and not osp.exists(output_dir):
                 os.makedirs(output_dir)
         device = torch.device(cfg.DEVICE)
         img_path_list = sorted(os.listdir(osp.join(data_root, seq, 'img1')))
@@ -370,23 +370,23 @@ if __name__ == '__main__':
     #               Venice-1'''
     # data_root = os.path.join(data_dir, 'MOT15/images/test')
     # # test mot17
-    # seqs_str = '''MOT17-01-SDP
-    #               MOT17-03-SDP
-    #               MOT17-06-SDP
-    #               MOT17-07-SDP
-    #               MOT17-08-SDP
-    #               MOT17-12-SDP
-    #               MOT17-14-SDP'''
-    # data_root = os.path.join(data_dir, 'MOT17/images/test')
+    seqs_str = '''MOT17-01-SDP
+                  MOT17-03-SDP
+                  MOT17-06-SDP
+                  MOT17-07-SDP
+                  MOT17-08-SDP
+                  MOT17-12-SDP
+                  MOT17-14-SDP'''
+    data_root = os.path.join(data_dir, 'data/MOT17/test')
     # val mot17
-    seqs_str = '''MOT17-02-SDP
-                  MOT17-04-SDP
-                  MOT17-05-SDP
-                  MOT17-09-SDP
-                  MOT17-10-SDP
-                  MOT17-11-SDP
-                  MOT17-13-SDP'''
-    data_root = os.path.join(data_dir, 'data/MOT17/train')
+    # seqs_str = '''MOT17-02-SDP
+    #               MOT17-04-SDP
+    #               MOT17-05-SDP
+    #               MOT17-09-SDP
+    #               MOT17-10-SDP
+    #               MOT17-11-SDP
+    #               MOT17-13-SDP'''
+    # data_root = os.path.join(data_dir, 'data/MOT17/train')
     # # val mot15
     # seqs_str = '''Venice-2
     #               KITTI-13

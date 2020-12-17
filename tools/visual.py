@@ -23,7 +23,8 @@ def parse_args():
     parser.add_argument(
         '--cfg',
         dest='yaml_file',
-        default='configs/deformable_track_single_test.yaml',
+        # default='configs/deformable_track_single_test.yaml',
+        default='configs/deformable_det.yaml',
         help='experiment configure file name, e.g. configs/deformable_track_single_test.yaml',
         type=str)    
     # default distributed training
@@ -67,7 +68,7 @@ def read_img(img_path):
     image = F_trans.normalize(image, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     return image
 
-def process_img(img_path, model, postprocessors, device, threshold=0.12):
+def process_img(img_path, model, postprocessors, device, threshold=0.3):
     model.eval()
     image = read_img(img_path)
     h, w = image.shape[1:]
@@ -97,7 +98,7 @@ def process_img(img_path, model, postprocessors, device, threshold=0.12):
     for box, score in zip(boxes_np, scores_np):
         x1, y1, x2, y2 = box.astype(int)
         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255) , 2)
-        cv2.putText(img, str(score)[1:5], (x1, y1-5), cv2.FONT_HERSHEY_COMPLEX_SMALL,
+        cv2.putText(img, str(score)[1:5], (x1, y2+5), cv2.FONT_HERSHEY_COMPLEX_SMALL,
             1, (255, 0, 0), 1, cv2.LINE_AA)
     return img, pred_out
 
@@ -105,7 +106,8 @@ def process_img(img_path, model, postprocessors, device, threshold=0.12):
 if __name__ == '__main__':
     args = parse_args()
     update_config(cfg, args)
-    resume_path = '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/output/deformable_step2_DeformableBaseTrack_epoch040_checkpoint.pth'
+    # resume_path = '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/output/deformable_motid_DeformableBaseTrack_epoch040_checkpoint.pth'
+    resume_path = 'output/deformable_det_more_DeformableDETR_epoch050_checkpoint.pth'
     device = torch.device(cfg.DEVICE)
     model, criterion, postprocessors = get_model(cfg, device)  
     model.to(device)
@@ -117,13 +119,14 @@ if __name__ == '__main__':
             print(f'==> model pretrained from {resume_path} \n')
 
     results = []
-    img_root = '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/data/MOT17/train/MOT17-02-SDP/img1'
-    out_root = 'test_out/MOT17-02-SDP'
+    img_root = '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/data/MOT17/test/MOT17-12-SDP/img1'
+    out_root = 'test_out/MOT17-12-SDP'
     if not os.path.exists(out_root):
         os.makedirs(out_root)
-    
+    path_list = sorted(os.listdir(img_root))
+    # path_list = [img_root]
     count = 0
-    for path in sorted(os.listdir(img_root)):
+    for path in path_list:
         if path.split('.')[-1] == 'json':
             continue
         img_path = os.path.join(img_root, path)
