@@ -211,6 +211,7 @@ class DeformableBaseTrack(nn.Module):
         if not self.two_stage:
             query_embeds = self.query_embed.weight
         hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact, enc_outputs_id_embeds = self.transformer(srcs, masks, pos, query_embeds)
+        enc_outpus_id_features = enc_outputs_id_embeds.clone()
         enc_outputs_id_embeds = self.emb_scale * F.normalize(enc_outputs_id_embeds)
         enc_outputs_id_embeds = self.id_head(enc_outputs_id_embeds.contiguous())
 
@@ -218,6 +219,7 @@ class DeformableBaseTrack(nn.Module):
         outputs_classes = []
         outputs_coords = []
         outputs_id_embeds = []
+        outputs_id_features = []
         outputs_next_centers = []
         for lvl in range(hs.shape[0]):
             if lvl == 0:
@@ -228,6 +230,7 @@ class DeformableBaseTrack(nn.Module):
             outputs_class = self.det_class_embed[lvl](hs[lvl])
             ###### modified ##########
             outputs_id_embed = self.id_embed[lvl](hs[lvl])
+            outputs_id_features.append(outputs_id_embed.clone())
             outputs_id_embed = self.emb_scale * F.normalize(outputs_id_embed)
             outputs_id_embed = self.id_head(outputs_id_embed.contiguous())
             # next_center_tmp = self.offset_embed[lvl](hs[lvl])
@@ -250,10 +253,11 @@ class DeformableBaseTrack(nn.Module):
         outputs_class = torch.stack(outputs_classes)
         outputs_coord = torch.stack(outputs_coords)
         outputs_id_embed = torch.stack(outputs_id_embeds)
+        outputs_id_features = torch.stack(outputs_id_features)
         # outputs_next_center = torch.stack(outputs_next_centers)
 
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
-               'id_embeds': outputs_id_embed[-1], 
+               'id_embeds': outputs_id_embed[-1], 'id_features': outputs_id_features[-1]
             #    'next_cenetrs': outputs_next_center[-1]
                }
         if self.aux_loss:
@@ -263,7 +267,7 @@ class DeformableBaseTrack(nn.Module):
         if self.two_stage:
             enc_outputs_coord = enc_outputs_coord_unact.sigmoid()
             out['enc_outputs'] = {'pred_logits': enc_outputs_class, 'pred_boxes': enc_outputs_coord,
-                                  'id_embeds': enc_outputs_id_embeds}
+                                  'id_embeds': enc_outputs_id_embeds, 'id_features': enc_outpus_id_features}
         return out
 
     @torch.jit.unused
@@ -473,6 +477,7 @@ class PostProcess(nn.Module):
                           For visualization, this should be the image size after data augment, but before padding
         """
         out_logits, out_bbox = outputs['pred_logits'], outputs['pred_boxes']
+        id_features = outputs['id_features']
 
         assert len(out_logits) == len(target_sizes)
         assert target_sizes.shape[1] == 2
@@ -493,6 +498,8 @@ class PostProcess(nn.Module):
         filenames = [filename] * len(scores)
         results = [{'filename': f, 'scores': s, 'labels': l, 'boxes': b} for f, s, l, b in zip(
             filenames, scores, labels, boxes)]
+        results[-1]['id_features'] =  id_features.reshape(-1, id_features.shape[
+            -1])[topk_boxes[0]]
 
         return results
 

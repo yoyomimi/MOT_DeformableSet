@@ -23,8 +23,8 @@ def parse_args():
     parser.add_argument(
         '--cfg',
         dest='yaml_file',
-        default='configs/deformable_det.yaml',
-        help='experiment configure file name, e.g. configs/fcos_detector.yaml',
+        default='configs/deformable_track_single_test.yaml',
+        help='experiment configure file name, e.g. configs/deformable_track_single_test.yaml',
         type=str)    
     # default distributed training
     parser.add_argument(
@@ -105,7 +105,7 @@ def process_img(img_path, model, postprocessors, device, threshold=0.12):
 if __name__ == '__main__':
     args = parse_args()
     update_config(cfg, args)
-    resume_path = '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/output/deformable_det_more_DeformableDETR_epoch050_checkpoint.pth'
+    resume_path = '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/output/deformable_step2_DeformableBaseTrack_epoch040_checkpoint.pth'
     device = torch.device(cfg.DEVICE)
     model, criterion, postprocessors = get_model(cfg, device)  
     model.to(device)
@@ -117,8 +117,8 @@ if __name__ == '__main__':
             print(f'==> model pretrained from {resume_path} \n')
 
     results = []
-    img_root = '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/data/MOT17/test/MOT17-01-DPM/img1'
-    out_root = 'test_out/MOT17-01'
+    img_root = '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/data/MOT17/train/MOT17-02-SDP/img1'
+    out_root = 'test_out/MOT17-02-SDP'
     if not os.path.exists(out_root):
         os.makedirs(out_root)
     
@@ -127,7 +127,7 @@ if __name__ == '__main__':
         if path.split('.')[-1] == 'json':
             continue
         img_path = os.path.join(img_root, path)
-        img, pred_out = process_img(img_path, model, postprocessors, device, threshold=0.3)
+        img, pred_out = process_img(img_path, model, postprocessors, device, threshold=0.12)
         out_path = os.path.join(out_root, path)
         results.append(pred_out)
         cv2.imwrite(out_path, img)

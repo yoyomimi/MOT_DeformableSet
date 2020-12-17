@@ -183,7 +183,7 @@ class JDETracker(object):
 
         self.kalman_filter = KalmanFilter()
 
-    def update(self, dets, id_feature):
+    def update(self, dets, id_feature, logger=None):
         self.frame_id += 1
         activated_starcks = []
         refind_stracks = []
@@ -287,12 +287,12 @@ class JDETracker(object):
         # get scores of lost tracks
         output_stracks = [track for track in self.tracked_stracks if track.is_activated]
 
-        if self.logger is not None:
-            self.logger.debug('===========Frame {}=========='.format(self.frame_id))
-            self.logger.debug('Activated: {}'.format([track.track_id for track in activated_starcks]))
-            self.logger.debug('Refind: {}'.format([track.track_id for track in refind_stracks]))
-            self.logger.debug('Lost: {}'.format([track.track_id for track in lost_stracks]))
-            self.logger.debug('Removed: {}'.format([track.track_id for track in removed_stracks]))
+        if logger is not None:
+            logger.debug('===========Frame {}=========='.format(self.frame_id))
+            logger.debug('Activated: {}'.format([track.track_id for track in activated_starcks]))
+            logger.debug('Refind: {}'.format([track.track_id for track in refind_stracks]))
+            logger.debug('Lost: {}'.format([track.track_id for track in lost_stracks]))
+            logger.debug('Removed: {}'.format([track.track_id for track in removed_stracks]))
 
         return output_stracks
 

@@ -1,0 +1,72 @@
+OUTPUT_ROOT: deformable_2step_test_0.2
+DIST_BACKEND: 'nccl'
+WORKERS: 4
+DEVICE: cuda
+SEED: 42
+DATASET:
+  FILE: customtask
+  NAME: CustomTaskDataset
+  ROOT: 'data/mot_pkl'
+  MEAN: [0.485, 0.456, 0.406]
+  STD: [0.229, 0.224, 0.225]
+  IMG_NUM_PER_GPU: 1
+  NUM_CLASSES: 2 # id 加 1
+  MAX_SIZE: 1333 #1333
+  SCALES: [608, 640, 672, 704, 736, 768, 800]
+  PREFIX: '/mnt/lustre/share/lindelv/data/mot'
+MODEL:
+  FILE: deformable_bastrack
+  NAME: DeformableBaseTrack
+  RESUME_PATH: 'data/r50_deformable_detr_plus_iterative_bbox_refinement_plus_plus_two_stage-checkpoint.pth'
+  # RESUME_PATH: 'output/deformable_det_more_DeformableDETR_epoch050_checkpoint.pth'
+BACKBONE:
+  NAME: resnet50
+  DIALATION: False
+DEFORMABLE:
+  WITH_BOX_REFINE: True
+  TWO_STAGE: True
+TRANSFORMER:
+  POSITION_EMBEDDING: sine # choices=('sine', 'learned')
+  NUM_FEATURE_LEVELS: 4 
+  HIDDEN_DIM: 256
+  ENC_LAYERS: 6
+  DEC_LAYERS: 6
+  DIM_FEEDFORWARD: 1024
+  DROPOUT: 0.1
+  NHEADS: 8
+  NUM_QUERIES: 300
+  DEC_N_POINTS: 4
+  ENC_N_POINTS: 4
+  PRE_NORM: False
+MATCHER:
+  COST_CLASS: 1
+  COST_BBOX: 5
+  COST_GIOU: 2
+LOSS: 
+  AUX_LOSS: True
+  DICE_LOSS_COEF: 1
+  ID_LOSS_COEF: 0.5
+  OFFSET_LOSS_COEF: 5
+  CLS_LOSS_COEF: 2
+  BBOX_LOSS_COEF: 5
+  GIOU_LOSS_COEF: 2
+  FOCAL_ALPHA: 0.25
+TRAINER:
+  FILE: det_trainer
+  NAME: DetTrainer
+TRAIN:
+  LR: 0.0001
+  LR_BACKBONE: 0.00001
+  LR_BACKBONE_NAMES: ["backbone.0"]
+  LR_PROJ_MULT: 0.1
+  LR_PROJ_NAMES: ['reference_points', 'sampling_offsets']
+  MOMENTUM: 0.9
+  WEIGHT_DECAY: 0.0001
+  LR_DROP: 40 #40
+  MAX_EPOCH: 70 #50
+  PRINT_FREQ: 20
+  SAVE_INTERVAL: 5 #5
+  SAVE_EVERY_CHECKPOINT: True
+  VAL_WHEN_TRAIN: False
+  CLIP_MAX_NORM: 0.1
+  RESUME: False
