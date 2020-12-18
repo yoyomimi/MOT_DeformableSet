@@ -1,4 +1,4 @@
-OUTPUT_ROOT: deformable_motid_test_0.35
+OUTPUT_ROOT: deformable_motid_test
 DIST_BACKEND: 'nccl'
 WORKERS: 4
 DEVICE: cuda

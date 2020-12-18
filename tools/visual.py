@@ -23,8 +23,8 @@ def parse_args():
     parser.add_argument(
         '--cfg',
         dest='yaml_file',
-        # default='configs/deformable_track_single_test.yaml',
-        default='configs/deformable_det.yaml',
+        default='configs/deformable_track_single_test.yaml',
+        # default='configs/deformable_det.yaml',
         help='experiment configure file name, e.g. configs/deformable_track_single_test.yaml',
         type=str)    
     # default distributed training
@@ -86,13 +86,15 @@ def process_img(img_path, model, postprocessors, device, threshold=0.3):
     labels = res['labels'][valid_inds]
     scores = res['scores'][valid_inds]
     valid_id = torch.where(labels==1)[0]
-    boxes_with_scores = torch.cat([boxes[valid_id].reshape(
-        -1, 4), scores[valid_id].reshape(-1, 1)], dim=1)
-    keep = hard_nms(boxes_with_scores, 0.5, return_pick=True)
-    boxes_np = boxes_with_scores[keep, :4].reshape(
-        -1, 4).data.cpu().numpy()
-    scores_np = boxes_with_scores[keep, -1].reshape(
-        -1, 1).data.cpu().numpy()
+    boxes_np = boxes[valid_id].reshape(-1, 4).data.cpu().numpy()
+    scores_np = scores[valid_id].reshape(-1, 1).data.cpu().numpy()
+    # boxes_with_scores = torch.cat([boxes[valid_id].reshape(
+    #     -1, 4), scores[valid_id].reshape(-1, 1)], dim=1)
+    # keep = hard_nms(boxes_with_scores, 1.0, return_pick=True)
+    # boxes_np = boxes_with_scores[keep, :4].reshape(
+    #     -1, 4).data.cpu().numpy()
+    # scores_np = boxes_with_scores[keep, -1].reshape(
+    #     -1, 1).data.cpu().numpy()
     img = cv2.imread(img_path, cv2.IMREAD_COLOR)
     img = cv2.resize(img, (w, h))
     for box, score in zip(boxes_np, scores_np):
@@ -107,7 +109,7 @@ if __name__ == '__main__':
     args = parse_args()
     update_config(cfg, args)
     # resume_path = '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/output/deformable_motid_DeformableBaseTrack_epoch040_checkpoint.pth'
-    resume_path = 'output/deformable_det_more_DeformableDETR_epoch050_checkpoint.pth'
+    resume_path = 'output/deformable_motid_right_DeformableBaseTrack_epoch005_checkpoint.pth'
     device = torch.device(cfg.DEVICE)
     model, criterion, postprocessors = get_model(cfg, device)  
     model.to(device)
@@ -119,8 +121,8 @@ if __name__ == '__main__':
             print(f'==> model pretrained from {resume_path} \n')
 
     results = []
-    img_root = '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/data/MOT17/test/MOT17-12-SDP/img1'
-    out_root = 'test_out/MOT17-12-SDP'
+    img_root = '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/data/MOT17/test/MOT17-01-SDP/img1'
+    out_root = 'test_out/MOT17-01-SDP'
     if not os.path.exists(out_root):
         os.makedirs(out_root)
     path_list = sorted(os.listdir(img_root))
@@ -130,7 +132,7 @@ if __name__ == '__main__':
         if path.split('.')[-1] == 'json':
             continue
         img_path = os.path.join(img_root, path)
-        img, pred_out = process_img(img_path, model, postprocessors, device, threshold=0.12)
+        img, pred_out = process_img(img_path, model, postprocessors, device, threshold=0.38)
         out_path = os.path.join(out_root, path)
         results.append(pred_out)
         cv2.imwrite(out_path, img)

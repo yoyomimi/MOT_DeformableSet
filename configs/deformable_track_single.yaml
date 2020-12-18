@@ -1,4 +1,4 @@
-OUTPUT_ROOT: deformable_motid_more
+OUTPUT_ROOT: deformable_motid_right
 DIST_BACKEND: 'nccl'
 WORKERS: 4
 DEVICE: cuda
@@ -62,8 +62,8 @@ TRAIN:
   LR_PROJ_NAMES: ['reference_points', 'sampling_offsets']
   MOMENTUM: 0.9
   WEIGHT_DECAY: 0.0001
-  LR_DROP: 40 #40
-  MAX_EPOCH: 70 #50
+  LR_DROP: 20 #40
+  MAX_EPOCH: 40 #50
   PRINT_FREQ: 20
   SAVE_INTERVAL: 5 #5
   SAVE_EVERY_CHECKPOINT: True
