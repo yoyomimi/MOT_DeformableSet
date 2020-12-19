@@ -92,7 +92,7 @@ class DeformableBaseTrack(nn.Module):
         nn.init.constant_(self.id_head.bias, bias_value)
         # self.IDLoss = nn.CrossEntropyLoss(ignore_index=-1)
         self.emb_scale = math.sqrt(2) * math.log(self.nID - 1)
-        # self.offset_embed = MLP(hidden_dim, hidden_dim, 2, 3)
+        self.offset_embed = MLP(hidden_dim, hidden_dim, 2, 3)
         ##########################
         self.num_feature_levels = num_feature_levels
         if not two_stage:
@@ -140,8 +140,8 @@ class DeformableBaseTrack(nn.Module):
             self.bbox_embed = _get_clones(self.bbox_embed, num_pred)
             ###### modified ##########
             self.id_embed =  _get_clones(self.id_embed, num_pred)
-            # self.offset_embed = _get_clones(self.offset_embed, transformer.decoder.num_layers)
-            # nn.init.constant_(self.offset_embed[0].layers[-1].bias.data[2:], -2.0)
+            self.offset_embed = _get_clones(self.offset_embed, transformer.decoder.num_layers)
+            nn.init.constant_(self.offset_embed[0].layers[-1].bias.data[2:], -2.0)
             ##########################
             nn.init.constant_(self.bbox_embed[0].layers[-1].bias.data[2:], -2.0)
             # hack implementation for iterative bounding box refinement
@@ -153,7 +153,7 @@ class DeformableBaseTrack(nn.Module):
             self.bbox_embed = nn.ModuleList([self.bbox_embed for _ in range(num_pred)])
             ###### modified ##########
             self.id_embed =  nn.ModuleList([self.id_embed for _ in range(num_pred)])
-            # self.offset_embed = nn.ModuleList([self.offset_embed for _ in range(transformer.decoder.num_layers)])
+            self.offset_embed = nn.ModuleList([self.offset_embed for _ in range(transformer.decoder.num_layers)])
             ##########################
             self.transformer.decoder.bbox_embed = None
         if two_stage:
@@ -161,8 +161,8 @@ class DeformableBaseTrack(nn.Module):
             self.transformer.decoder.det_class_embed = self.det_class_embed
             ###### modified ##########
             self.transformer.decoder.id_embed =  self.id_embed
-            # for offset_embed in self.offset_embed:
-            #     nn.init.constant_(offset_embed.layers[-1].bias.data[2:], 0.0)
+            for offset_embed in self.offset_embed:
+                nn.init.constant_(offset_embed.layers[-1].bias.data[2:], 0.0)
             ##########################
             for box_embed in self.bbox_embed:
                 nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
@@ -233,32 +233,31 @@ class DeformableBaseTrack(nn.Module):
             outputs_id_features.append(outputs_id_embed.clone())
             outputs_id_embed = self.emb_scale * F.normalize(outputs_id_embed)
             outputs_id_embed = self.id_head(outputs_id_embed.contiguous())
-            # next_center_tmp = self.offset_embed[lvl](hs[lvl])
+            next_center_tmp = self.offset_embed[lvl](hs[lvl])
             ##########################
             tmp = self.bbox_embed[lvl](hs[lvl])
             if reference.shape[-1] == 4:
                 tmp += reference
-                # next_center_tmp += reference[..., :2]
             else:
                 assert reference.shape[-1] == 2
                 tmp[..., :2] += reference
-                # next_center_tmp += reference
+            next_center_tmp += tmp[..., :2]
             outputs_coord = tmp.sigmoid()
-            # outputs_next_center = next_center_tmp.sigmoid()
+            outputs_next_center = next_center_tmp.sigmoid()
 
             outputs_classes.append(outputs_class)
             outputs_coords.append(outputs_coord)
             outputs_id_embeds.append(outputs_id_embed)
-            # outputs_next_centers.append(outputs_next_center)
+            outputs_next_centers.append(outputs_next_center)
         outputs_class = torch.stack(outputs_classes)
         outputs_coord = torch.stack(outputs_coords)
         outputs_id_embed = torch.stack(outputs_id_embeds)
         outputs_id_features = torch.stack(outputs_id_features)
-        # outputs_next_center = torch.stack(outputs_next_centers)
+        outputs_next_center = torch.stack(outputs_next_centers)
 
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
                'id_embeds': outputs_id_embed[-1], 'id_features': outputs_id_features[-1]
-            #    'next_cenetrs': outputs_next_center[-1]
+               'next_cenetrs': outputs_next_center[-1]
                }
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord,
@@ -369,13 +368,11 @@ class SetCriterion(nn.Module):
             # TODO this should probably be a separate loss, not hacked in this one here
             losses['id_class_error'] = 100 - accuracy(outputs_src_id_logits, target_ids)[0]
 
-        # if outputs['next_cenetrs'] is None:
-        #     losses['loss_next_cenetrs'] = torch.Tensor([0.]).mean().to(outputs_src_id_logits.device)
-        # else:
-        #     src_next_centers = outputs['next_cenetrs'][idx]
-        #     target_next_centers = torch.cat([t['next_centers'][i] for t, (_, i) in zip(targets, indices)], dim=0)
-        #     loss_next_cenetrs = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
-        #     losses['loss_next_cenetrs'] = loss_next_cenetrs.sum() / num_boxes
+        if outputs['next_cenetrs'] is not None:
+            src_next_centers = outputs['next_cenetrs'][idx][valids_ids]
+            target_next_centers = torch.cat([t['next_centers'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+            loss_next_cenetrs = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
+            losses['loss_next_cenetrs'] = loss_next_cenetrs.sum() / num_boxes
         ##########################
 
         loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
@@ -539,13 +536,14 @@ def build_model(cfg, device):
     weight_dict = {'loss_ce': cfg.LOSS.CLS_LOSS_COEF, 'loss_bbox': cfg.LOSS.BBOX_LOSS_COEF}
     weight_dict['loss_giou'] = cfg.LOSS.GIOU_LOSS_COEF
     weight_dict['loss_ids'] = cfg.LOSS.ID_LOSS_COEF
-    # weight_dict['loss_next_cenetrs'] = cfg.LOSS.OFFSET_LOSS_COEF
+    weight_dict['loss_next_cenetrs'] = cfg.LOSS.OFFSET_LOSS_COEF
     # TODO this is a hack
     if cfg.LOSS.AUX_LOSS:
         aux_weight_dict = {}
         for i in range(cfg.TRANSFORMER.DEC_LAYERS - 1):
             aux_weight_dict.update({k + f'_{i}': v for k, v in weight_dict.items()})
         aux_weight_dict.update({k + f'_enc': v for k, v in weight_dict.items()})
+        aux_weight_dict.pop('loss_next_cenetrs_enc')
         weight_dict.update(aux_weight_dict)
 
     losses = ['labels', 'boxes', 'cardinality']
