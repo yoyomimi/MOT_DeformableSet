@@ -10,8 +10,9 @@
 """
 Modules to compute the matching cost and solve the corresponding LSAP.
 """
-import torch
+import lap
 from scipy.optimize import linear_sum_assignment
+import torch
 from torch import nn
 
 from libs.utils.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
@@ -44,7 +45,7 @@ class HungarianMatcher(nn.Module):
         self.cost_ids = cost_ids
         assert cost_class != 0 or cost_bbox != 0 or cost_giou != 0 or cost_ids != 0, "all costs cant be 0"
 
-    def forward(self, outputs, targets):
+    def forward(self, outputs, ref_indices=None, inf=1e10):
         """ Performs the matching
 
         Params:
@@ -73,7 +74,7 @@ class HungarianMatcher(nn.Module):
 
             # Also concat the target labels and boxes
             tgt_ids = torch.cat([v["labels"] for v in targets])
-            tgt_bbox = torch.cat([v["boxes"] for v in targets])
+            tgt_bbox = torch.cat([v["boxes"] for v in targets])    
 
             # Compute the classification cost.
             alpha = 0.25
@@ -101,8 +102,18 @@ class HungarianMatcher(nn.Module):
             #     cost_ids = neg_cost_ids[:, tgt_feat_ids] - pos_cost_ids[:, tgt_feat_ids]
             #     C = C + self.cost_ids * cost_ids
 
-            C = C.view(bs, num_queries, -1).cpu()
+            C = C.view(bs, num_queries, -1)
 
+            if ref_indices is not None:
+                batch_ref_indexes = torch.cat([torch.full_like(out_idx, i) for i, (
+                    out_idx, _) in enumerate(ref_indices)])
+                matched_out_idx = torch.cat([out_idx for (out_idx, _) in ref_indices])
+                tgt_ref_idx = torch.cat([tgt_idx for (_, tgt_idx) in ref_indices])
+                C[batch_ref_indexes, matched_out_idx] = inf
+                C[batch_ref_indexes, ..., tgt_ref_idx] = inf 
+                C[batch_ref_indexes, matched_out_idx, tgt_ref_idx] = 0.0
+
+            C = C.cpu()
             sizes = [len(v["boxes"]) for v in targets]
             indices = [linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))]
             return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
@@ -116,21 +127,27 @@ class ReferTrackMatcher(nn.Module):
     """
 
     def __init__(self,
-                 cost_emb: float = 0.98,
-                 cost_loc: float = 0.02,
+                 cost_feat: float = 0.98,
+                 dist_thr: float = 9.4877,
+                 cost_limit: float = 0.4,
                  ):
         """Creates the matcher
 
         Params:
-            cost_emb: This is the relative weight of the appearance similarity in the matching cost
-            cost_loc: This is the relative weight of the locations overlap in the matching cost
+            cost_feat: This is the relative weight of the feature similarity in the matching cost
         """
         super().__init__()
-        self.cost_emb = cost_emb
-        self.cost_loc = cost_loc
+        self.cost_feat = cost_feat
+        self.dist_thr = dist_thr
+        self.cost_limit = cost_limit
         assert cost_emb != 0 or cost_loc != 0, "all costs cant be 0"
+    
+    def cosine_distance(x1, x2, eps=1e-8):
+        w1 = x1.norm(p=2, dim=1, keepdim=True)
+        w2 = x2.norm(p=2, dim=1, keepdim=True)
+        return 1 - torch.mm(x1, x2.t()) / (w1 * w2.t()).clamp(min=eps)
 
-    def forward(self, enc_outputs, references):
+    def forward(self, enc_outputs, references, inf=1e10):
         """ Performs the matching
 
         Params:
@@ -139,10 +156,11 @@ class ReferTrackMatcher(nn.Module):
                  "pred_boxes": Tensor of dim [batch_size, num_queries, 4] with the predicted box coordinates
 
             references: This is a list of references (len(references) = batch_size), where each reference is a dict containing:
-                 "ref_embeds": Tensor of dim [num_refer_boxes, emb_dim] (where num_refer_boxes is the number of detected boxes 
-                               in the previous frame) containing the reference appearance embeddings
-                 "ref_centers": Tensor of dim [num_refer_boxes, 2] containing the reference box centers predicted 
-                               in the previous frame
+                 "ref_features": Tensor of dim [num_refer_boxes, emb_dim] (where num_refer_boxes is the number of detected boxes 
+                                 in the previous frame) containing the reference appearance embeddings, detached.
+                 "ref_boxes": Tensor of dim [num_refer_boxes, 4] containing the reference box coordinates predicted 
+                              in the previous frame
+                 "idx_map": Tensor of dim [num_refer_boxes, num_targets], map the refer index to the target index
 
         Returns:
             A list of size batch_size, containing tuples of (index_i, index_j) where:
@@ -155,36 +173,36 @@ class ReferTrackMatcher(nn.Module):
             bs, num_queries = enc_outputs["id_features"].shape[:2]
 
             # We flatten to compute the cost matrices in a batch
-            out_prob = outputs["pred_logits"].flatten(0, 1).sigmoid()
-            out_bbox = outputs["pred_boxes"].flatten(0, 1)  # [batch_size * num_queries, 4]
+            id_features = enc_outputs["id_features"].flatten(0, 1)
+            pred_boxes = enc_outputs["pred_boxes"].flatten(0, 1) # [batch_size * num_queries, 4]
 
             # Also concat the target labels and boxes
-            tgt_ids = torch.cat([v["labels"] for v in targets])
-            tgt_bbox = torch.cat([v["boxes"] for v in targets])
+            ref_features = torch.cat([v["ref_features"] for v in references])
+            ref_boxes = torch.cat([v["ref_boxes"] for v in references])
+            assert len(ref_features) == len(ref_boxes)
 
-            # Compute the classification cost.
-            alpha = 0.25
-            gamma = 2.0
-            neg_cost_class = (1 - alpha) * (out_prob ** gamma) * (-(1 - out_prob + 1e-8).log())
-            pos_cost_class = alpha * ((1 - out_prob) ** gamma) * (-(out_prob + 1e-8).log())
-            cost_class = pos_cost_class[:, tgt_ids] - neg_cost_class[:, tgt_ids]
-            # Compute the L1 cost between boxes
-            cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
-
-            # Compute the giou cost betwen boxes
-            cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(out_bbox),
-                                             box_cxcywh_to_xyxy(tgt_bbox))
+            # Compute the feature similarity
+            cost_feature = self.cosine_distance(id_features, ref_features)
+            # Compute the distance ** 2 between boxes 
+            cost_distance = torch.pow(torch.cdist(pred_boxes, ref_boxes, p=2), 2)
+            cost_feature[cost_distance>self.dist_thr] = inf
 
             # Final cost matrix
-            C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
+            C = self.cost_feat * cost_feature + (1 - self.cost_feat) * cost_distance
 
             C = C.view(bs, num_queries, -1).cpu()
 
-            sizes = [len(v["boxes"]) for v in targets]
-            indices = [linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))]
-            return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
+            sizes = [len(v["ref_boxes"]) for v in references]
+            ref_indices = [lap.lapjv(c[i].data.cpu().numpy(), extend_cost=True,
+                cost_limit=self.cost_limit)[1] for i, c in enumerate(C.split(sizes, -1))]
+            ref_indices = [(torch.as_tensor(torch.range(0, len(idx)-1)[idx>=0], dtype=torch.int64), r['idx_map'][torch.as_tensor(idx[
+                idx>=0], dtype=torch.int64)].long()) for i, (r, idx) in enumerate(zip(references, ref_indices))]
+            return ref_indices
 
 
 def build_matcher(cfg):
     return HungarianMatcher(cost_class=cfg.MATCHER.COST_CLASS,
         cost_bbox=cfg.MATCHER.COST_BBOX, cost_giou=cfg.MATCHER.COST_GIOU)
+
+def build_refer_matcher(cfg):
+    return ReferTrackMatcher()

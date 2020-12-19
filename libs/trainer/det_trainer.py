@@ -50,6 +50,7 @@ class DetTrainer(BaseTrainer):
         self.device = device
         self.max_norm = max_norm
         self.logger = logger
+        self.prev_features = None
         
     def _read_inputs(self, inputs):
         imgs, targets, filenames = inputs
@@ -62,7 +63,20 @@ class DetTrainer(BaseTrainer):
         imgs = data[0]
         targets = data[1]
         outputs = self.model(imgs)
-        loss_dict = self.criterion(outputs, targets)
+        loss_dict = self.criterion(outputs, targets, self.model.ref_indices)
+        ### Modified ###
+        indices = self.criterion.out_indices
+        # TODO use indices and targets to collect detached features in order as macthed_boxes
+        # in target prev->next: idx_map; selected matched boxes: macthed_idx
+        self.prev_features.detach()
+        if self.prev_features is not None:
+            references = [dict(ref_features=f, ref_boxes=t['macthed_boxes'], idx_map=t['idx_map'])
+                             for f, t in zip(self.prev_features, targets)]
+        else:
+            references = None
+        outputs = self.model(next_imgs, references)
+        loss_dict_next = self.criterion(outputs, next_targets, self.model.ref_indices)
+        ##########
         return loss_dict
 
     def train(self, train_loader, eval_loader):

@@ -21,7 +21,7 @@ from libs.utils.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        is_dist_avail_and_initialized, inverse_sigmoid)
 
 from libs.models.backbone import build_backbone
-from libs.models.matcher import build_matcher
+from libs.models.matcher import build_matcher, build_refer_matcher
 from libs.models.deformable_transformer import build_deforamble_transformer
 import copy
 
@@ -62,7 +62,7 @@ def sigmoid_focal_loss(inputs, targets, num_boxes=None, reduction='mean', alpha:
 
 
 class DeformableBaseTrack(nn.Module):
-    def __init__(self, backbone, transformer, num_classes, num_queries, num_feature_levels,
+    def __init__(self, backbone, transformer, num_classes, num_queries, num_feature_levels, refer_matcher=None,
                  emb_dim=128, dataset_nids=13837, aux_loss=True, with_box_refine=False, two_stage=False):
         """ Initializes the model.
         Parameters:
@@ -93,6 +93,8 @@ class DeformableBaseTrack(nn.Module):
         # self.IDLoss = nn.CrossEntropyLoss(ignore_index=-1)
         self.emb_scale = math.sqrt(2) * math.log(self.nID - 1)
         self.offset_embed = MLP(hidden_dim, hidden_dim, 2, 3)
+        self.refer_matcher = refer_matcher
+        self.ref_indices = None
         ##########################
         self.num_feature_levels = num_feature_levels
         if not two_stage:
@@ -167,7 +169,7 @@ class DeformableBaseTrack(nn.Module):
             for box_embed in self.bbox_embed:
                 nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
 
-    def forward(self, samples: NestedTensor):
+    def forward(self, samples: NestedTensor, references=None):
         """ The forward expects a NestedTensor, which consists of:
                - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
                - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
@@ -210,7 +212,9 @@ class DeformableBaseTrack(nn.Module):
         query_embeds = None
         if not self.two_stage:
             query_embeds = self.query_embed.weight
-        hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact, enc_outputs_id_embeds = self.transformer(srcs, masks, pos, query_embeds)
+        hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact, enc_outputs_id_embeds, ref_indices = self.transformer(
+            srcs, masks, pos, query_embeds, self.refer_matcher, references)
+        self.ref_indices = ref_indices
         enc_outpus_id_features = enc_outputs_id_embeds.clone()
         enc_outputs_id_embeds = self.emb_scale * F.normalize(enc_outputs_id_embeds)
         enc_outputs_id_embeds = self.id_head(enc_outputs_id_embeds.contiguous())
@@ -405,18 +409,24 @@ class SetCriterion(nn.Module):
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
         return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
 
-    def forward(self, outputs, targets):
+    def forward(self, outputs, targets, ref_indices=None):
         """ This performs the loss computation.
         Parameters:
              outputs: dict of tensors, see the output specification of the model for the format
              targets: list of dicts, such that len(targets) == batch_size.
                       The expected keys in each dict depends on the losses applied, see each loss' doc
+             references(optional): This is a list of references (len(references) = batch_size), where each reference is a dict containing:
+                "ref_features": Tensor of dim [num_refer_boxes, emb_dim] (where num_refer_boxes is the number of detected boxes 
+                                in the previous frame) containing the reference appearance embeddings
+                "ref_boxes": Tensor of dim [num_refer_boxes, 4] containing the reference box coordinates predicted 
+                             in the previous frame
+                "idx_map": Tensor of dim [num_refer_boxes, num_targets], map the refer index to the target index
         """
         outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs' and k != 'enc_outputs'}
 
         # Retrieve the matching between the outputs of the last layer and the targets
-        indices = self.matcher(outputs_without_aux, targets)
-
+        indices = self.matcher(outputs_without_aux, targets, ref_indices)
+        self.out_indices = indices
         # Compute the average number of target boxes accross all nodes, for normalization purposes
         num_boxes = sum(len(t["labels"]) for t in targets)
         num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
@@ -433,7 +443,7 @@ class SetCriterion(nn.Module):
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
         if 'aux_outputs' in outputs:
             for i, aux_outputs in enumerate(outputs['aux_outputs']):
-                indices = self.matcher(aux_outputs, targets)
+                indices = self.matcher(aux_outputs, targets, ref_indices)
                 for loss in self.losses:
                     kwargs = {}
                     if loss == 'labels':
@@ -448,7 +458,7 @@ class SetCriterion(nn.Module):
             bin_targets = copy.deepcopy(targets)
             for bt in bin_targets:
                 bt['labels'] = torch.zeros_like(bt['labels'])
-            indices = self.matcher(enc_outputs, bin_targets)
+            indices = self.matcher(enc_outputs, bin_targets, ref_indices)
             for loss in self.losses:
                 kwargs = {}
                 if loss == 'labels':
@@ -533,6 +543,7 @@ def build_model(cfg, device):
         two_stage=cfg.DEFORMABLE.TWO_STAGE,
     )
     matcher = build_matcher(cfg)
+    ref_matcher = build_refer_matcher(cfg)
     weight_dict = {'loss_ce': cfg.LOSS.CLS_LOSS_COEF, 'loss_bbox': cfg.LOSS.BBOX_LOSS_COEF}
     weight_dict['loss_giou'] = cfg.LOSS.GIOU_LOSS_COEF
     weight_dict['loss_ids'] = cfg.LOSS.ID_LOSS_COEF
@@ -549,7 +560,7 @@ def build_model(cfg, device):
     losses = ['labels', 'boxes', 'cardinality']
     # num_classes, matcher, weight_dict, losses, focal_alpha=0.25
     criterion = SetCriterion(num_classes, matcher, weight_dict, losses, 
-        focal_alpha=cfg.LOSS.FOCAL_ALPHA)
+        refer_matcher=refer_matcher, focal_alpha=cfg.LOSS.FOCAL_ALPHA)
     criterion.to(device)
     postprocessors = PostProcess()
 

@@ -53,6 +53,7 @@ class DeformableTransformer(nn.Module):
         else:
             self.reference_points = nn.Linear(d_model, 2)
 
+
         self._reset_parameters()
 
     def _reset_parameters(self):
@@ -123,7 +124,7 @@ class DeformableTransformer(nn.Module):
         valid_ratio = torch.stack([valid_ratio_w, valid_ratio_h], -1)
         return valid_ratio
 
-    def forward(self, srcs, masks, pos_embeds, query_embed=None):
+    def forward(self, srcs, masks, pos_embeds, query_embed=None, refer_matcher=None, references=None):
         assert self.two_stage or query_embed is not None
 
         # prepare input for encoder
@@ -168,6 +169,16 @@ class DeformableTransformer(nn.Module):
             topk_coords_unact = torch.gather(enc_outputs_coord_unact, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, 4))
             topk_coords_unact = topk_coords_unact.detach()
             reference_points = topk_coords_unact.sigmoid()
+            
+            if self.refer_matcher is not None and references is not None:
+                # TODO replace ref points
+                enc_outputs = None
+                ref_indices = refer_matcher(enc_outputs, references)
+            else:
+                ref_indices = None
+
+
+
             init_reference_out = reference_points
             pos_trans_out = self.pos_trans_norm(self.pos_trans(self.get_proposal_pos_embed(topk_coords_unact)))
             query_embed, tgt = torch.split(pos_trans_out, c, dim=2)
@@ -184,8 +195,8 @@ class DeformableTransformer(nn.Module):
 
         inter_references_out = inter_references
         if self.two_stage:
-            return hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact, enc_outputs_id_embeds
-        return hs, init_reference_out, inter_references_out, None, None, None
+            return hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact, enc_outputs_id_embeds, ref_indices
+        return hs, init_reference_out, inter_references_out, None, None, None, None
 
 
 class DeformableTransformerEncoderLayer(nn.Module):

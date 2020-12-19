@@ -187,6 +187,7 @@ class BaseTrackDataset(Dataset):
 
         img, _ = img_list
         target, next_target = target_list
+        # TODO map_idx, matched_idx, next_boxes, for the joint training
         out_target = dict(
             boxes=target['boxes'],
             ids=target['ids'],
