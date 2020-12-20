@@ -61,9 +61,9 @@ def sigmoid_focal_loss(inputs, targets, num_boxes=None, reduction='mean', alpha:
         return loss.sum()
 
 
-class DeformableBaseTrack(nn.Module):
+class DeformableTrack(nn.Module):
     def __init__(self, backbone, transformer, num_classes, num_queries, num_feature_levels, refer_matcher=None,
-                 emb_dim=128, dataset_nids=13837, aux_loss=True, with_box_refine=False, two_stage=False):
+                 emb_dim=128, dataset_nids=759, aux_loss=True, with_box_refine=False, two_stage=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -85,11 +85,11 @@ class DeformableBaseTrack(nn.Module):
         self.id_embed =  MLP(hidden_dim, hidden_dim, emb_dim, 3)
         self.nID = dataset_nids
         self.emb_dim = emb_dim
-        self.id_head = nn.Linear(self.emb_dim, self.nID)
-        nn.init.normal_(self.id_head.weight, std=0.01)
+        self.light_id_head = nn.Linear(self.emb_dim, self.nID)
+        nn.init.normal_(self.light_id_head.weight, std=0.01)
         prior_prob = 0.01
         bias_value = -math.log((1 - prior_prob) / prior_prob)
-        nn.init.constant_(self.id_head.bias, bias_value)
+        nn.init.constant_(self.light_id_head.bias, bias_value)
         # self.IDLoss = nn.CrossEntropyLoss(ignore_index=-1)
         self.emb_scale = math.sqrt(2) * math.log(self.nID - 1)
         self.offset_embed = MLP(hidden_dim, hidden_dim, 2, 3)
@@ -217,7 +217,7 @@ class DeformableBaseTrack(nn.Module):
         self.ref_indices = ref_indices
         enc_outpus_id_features = enc_outputs_id_embeds.clone()
         enc_outputs_id_embeds = self.emb_scale * F.normalize(enc_outputs_id_embeds)
-        enc_outputs_id_embeds = self.id_head(enc_outputs_id_embeds.contiguous())
+        enc_outputs_id_embeds = self.light_id_head(enc_outputs_id_embeds.contiguous())
 
 
         outputs_classes = []
@@ -236,7 +236,7 @@ class DeformableBaseTrack(nn.Module):
             outputs_id_embed = self.id_embed[lvl](hs[lvl])
             outputs_id_features.append(outputs_id_embed.clone())
             outputs_id_embed = self.emb_scale * F.normalize(outputs_id_embed)
-            outputs_id_embed = self.id_head(outputs_id_embed.contiguous())
+            outputs_id_embed = self.light_id_head(outputs_id_embed.contiguous())
             next_center_tmp = self.offset_embed[lvl](hs[lvl])
             ##########################
             tmp = self.bbox_embed[lvl](hs[lvl])
@@ -262,12 +262,12 @@ class DeformableBaseTrack(nn.Module):
         self.out_pred_next_boxes = outputs_coord[-1].clone()
         self.out_pred_next_boxes[..., :2] = outputs_next_center[-1]
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
-               'id_embeds': outputs_id_embed[-1], 'id_features': outputs_id_features[-1]
-               'next_cenetrs': outputs_next_center[-1]
+               'id_embeds': outputs_id_embed[-1], 'id_features': outputs_id_features[-1],
+               'next_centers': outputs_next_center[-1]
                }
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord,
-                outputs_id_embed)
+                outputs_id_embed, outputs_next_center)
 
         if self.two_stage:
             enc_outputs_coord = enc_outputs_coord_unact.sigmoid()
@@ -276,12 +276,13 @@ class DeformableBaseTrack(nn.Module):
         return out
 
     @torch.jit.unused
-    def _set_aux_loss(self, outputs_class, outputs_coord, outputs_id_embed):
+    def _set_aux_loss(self, outputs_class, outputs_coord, outputs_id_embed, outputs_next_center):
         # this is a workaround to make torchscript happy, as torchscript
         # doesn't support dictionary with non-homogeneous values, such
         # as a dict having both a Tensor and a list.
-        return [{'pred_logits': a, 'pred_boxes': b, 'id_embeds': c}
-                for a, b, c in zip(outputs_class[:-1], outputs_coord[:-1], outputs_id_embed[:-1])]
+        return [{'pred_logits': a, 'pred_boxes': b, 'id_embeds': c, 'next_centers': d}
+                for a, b, c, d in zip(outputs_class[:-1], outputs_coord[:-1], outputs_id_embed[:-1],
+                    outputs_next_center[:-1])]
 
 
 class SetCriterion(nn.Module):
@@ -383,14 +384,14 @@ class SetCriterion(nn.Module):
             # TODO this should probably be a separate loss, not hacked in this one here
             losses['id_class_error'] = 100 - accuracy(outputs_src_id_logits, target_ids)[0]
 
-        if outputs['next_cenetrs'] is not None:
+        if 'next_centers' in outputs:
             if is_next is True:
-                losses['loss_next_cenetrs'] = torch.Tensor([0.]).mean().to(src_boxes.device)
+                losses['loss_next_centers'] = torch.Tensor([0.]).mean().to(src_boxes.device)
             else:
-                src_next_centers = outputs['next_cenetrs'][idx][valids_ids]
+                src_next_centers = outputs['next_centers'][idx][valids_ids]
                 target_next_centers = torch.cat([t['next_centers'][i] for t, (_, i) in zip(targets, indices)], dim=0)
-                loss_next_cenetrs = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
-                losses['loss_next_cenetrs'] = loss_next_cenetrs.sum() / num_boxes
+                loss_next_centers = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
+                losses['loss_next_centers'] = loss_next_centers.sum() / num_boxes
         ##########################
         loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
         losses['loss_bbox'] = loss_bbox.sum() / num_boxes
@@ -441,7 +442,10 @@ class SetCriterion(nn.Module):
         indices = self.matcher(outputs_without_aux, targets, ref_indices, is_next)
         self.out_indices = indices
         # Compute the average number of target boxes accross all nodes, for normalization purposes
-        num_boxes = sum(len(t["labels"]) for t in targets)
+        if is_next is True:
+            num_boxes = sum(len(t["next_labels"]) for t in targets)
+        else:
+            num_boxes = sum(len(t["labels"]) for t in targets)
         num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
         if is_dist_avail_and_initialized():
             torch.distributed.all_reduce(num_boxes)
@@ -451,6 +455,7 @@ class SetCriterion(nn.Module):
         losses = {}
         for loss in self.losses:
             kwargs = {}
+            kwargs['is_next'] = is_next
             losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes, **kwargs))
 
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
@@ -471,10 +476,14 @@ class SetCriterion(nn.Module):
             enc_outputs = outputs['enc_outputs']
             bin_targets = copy.deepcopy(targets)
             for bt in bin_targets:
-                bt['labels'] = torch.zeros_like(bt['labels'])
+                if is_next is True:
+                    bt['next_labels'] = torch.zeros_like(bt['next_labels'])
+                else:
+                    bt['labels'] = torch.zeros_like(bt['labels'])
             indices = self.matcher(enc_outputs, bin_targets, ref_indices, is_next)
             for loss in self.losses:
                 kwargs = {}
+                kwargs['is_next'] = is_next
                 if loss == 'labels':
                     # Logging is enabled only for the last layer
                     kwargs['log'] = False
@@ -546,35 +555,36 @@ def build_model(cfg, device):
     backbone = build_backbone(cfg)
 
     transformer = build_deforamble_transformer(cfg)
-    model = DeformableBaseTrack(
+    matcher = build_matcher(cfg)
+    ref_matcher = build_refer_matcher(cfg)
+    model = DeformableTrack(
         backbone,
         transformer,
         num_classes=num_classes,
         num_queries=cfg.TRANSFORMER.NUM_QUERIES,
         num_feature_levels=cfg.TRANSFORMER.NUM_FEATURE_LEVELS,
+        refer_matcher=ref_matcher,
         aux_loss=cfg.LOSS.AUX_LOSS,
         with_box_refine=cfg.DEFORMABLE.WITH_BOX_REFINE,
         two_stage=cfg.DEFORMABLE.TWO_STAGE,
     )
-    matcher = build_matcher(cfg)
-    ref_matcher = build_refer_matcher(cfg)
     weight_dict = {'loss_ce': cfg.LOSS.CLS_LOSS_COEF, 'loss_bbox': cfg.LOSS.BBOX_LOSS_COEF}
     weight_dict['loss_giou'] = cfg.LOSS.GIOU_LOSS_COEF
     weight_dict['loss_ids'] = cfg.LOSS.ID_LOSS_COEF
-    weight_dict['loss_next_cenetrs'] = cfg.LOSS.OFFSET_LOSS_COEF
+    weight_dict['loss_next_centers'] = cfg.LOSS.OFFSET_LOSS_COEF
     # TODO this is a hack
     if cfg.LOSS.AUX_LOSS:
         aux_weight_dict = {}
         for i in range(cfg.TRANSFORMER.DEC_LAYERS - 1):
             aux_weight_dict.update({k + f'_{i}': v for k, v in weight_dict.items()})
         aux_weight_dict.update({k + f'_enc': v for k, v in weight_dict.items()})
-        aux_weight_dict.pop('loss_next_cenetrs_enc')
+        aux_weight_dict.pop('loss_next_centers_enc')
         weight_dict.update(aux_weight_dict)
 
     losses = ['labels', 'boxes', 'cardinality']
     # num_classes, matcher, weight_dict, losses, focal_alpha=0.25
     criterion = SetCriterion(num_classes, matcher, weight_dict, losses, 
-        refer_matcher=refer_matcher, focal_alpha=cfg.LOSS.FOCAL_ALPHA)
+        focal_alpha=cfg.LOSS.FOCAL_ALPHA)
     criterion.to(device)
     postprocessors = PostProcess()
 

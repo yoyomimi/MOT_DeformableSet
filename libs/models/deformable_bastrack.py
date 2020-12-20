@@ -258,7 +258,7 @@ class DeformableBaseTrack(nn.Module):
 
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
                'id_embeds': outputs_id_embed[-1], 'id_features': outputs_id_features[-1]
-            #    'next_cenetrs': outputs_next_center[-1]
+            #    'next_centers': outputs_next_center[-1]
                }
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord,
@@ -369,13 +369,13 @@ class SetCriterion(nn.Module):
             # TODO this should probably be a separate loss, not hacked in this one here
             losses['id_class_error'] = 100 - accuracy(outputs_src_id_logits, target_ids)[0]
 
-        # if outputs['next_cenetrs'] is None:
-        #     losses['loss_next_cenetrs'] = torch.Tensor([0.]).mean().to(outputs_src_id_logits.device)
+        # if outputs['next_centers'] is None:
+        #     losses['loss_next_centers'] = torch.Tensor([0.]).mean().to(outputs_src_id_logits.device)
         # else:
-        #     src_next_centers = outputs['next_cenetrs'][idx]
+        #     src_next_centers = outputs['next_centers'][idx]
         #     target_next_centers = torch.cat([t['next_centers'][i] for t, (_, i) in zip(targets, indices)], dim=0)
-        #     loss_next_cenetrs = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
-        #     losses['loss_next_cenetrs'] = loss_next_cenetrs.sum() / num_boxes
+        #     loss_next_centers = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
+        #     losses['loss_next_centers'] = loss_next_centers.sum() / num_boxes
         ##########################
 
         loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
@@ -539,7 +539,7 @@ def build_model(cfg, device):
     weight_dict = {'loss_ce': cfg.LOSS.CLS_LOSS_COEF, 'loss_bbox': cfg.LOSS.BBOX_LOSS_COEF}
     weight_dict['loss_giou'] = cfg.LOSS.GIOU_LOSS_COEF
     weight_dict['loss_ids'] = cfg.LOSS.ID_LOSS_COEF
-    # weight_dict['loss_next_cenetrs'] = cfg.LOSS.OFFSET_LOSS_COEF
+    # weight_dict['loss_next_centers'] = cfg.LOSS.OFFSET_LOSS_COEF
     # TODO this is a hack
     if cfg.LOSS.AUX_LOSS:
         aux_weight_dict = {}

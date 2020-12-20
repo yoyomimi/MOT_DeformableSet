@@ -45,7 +45,7 @@ class HungarianMatcher(nn.Module):
         self.cost_ids = cost_ids
         assert cost_class != 0 or cost_bbox != 0 or cost_giou != 0 or cost_ids != 0, "all costs cant be 0"
 
-    def forward(self, outputs, ref_indices=None, , is_next=False, inf=1e10):
+    def forward(self, outputs, targets, ref_indices=None, is_next=False, inf=1e10):
         """ Performs the matching
 
         Params:
@@ -76,10 +76,12 @@ class HungarianMatcher(nn.Module):
             if is_next is True:
                 tgt_ids = torch.cat([v["next_labels"] for v in targets])
                 tgt_bbox = torch.cat([v["next_boxes"] for v in targets])
+                sizes = [len(v["next_boxes"]) for v in targets]
                 # tgt_feat_ids = torch.cat([v["next_ids"] for v in targets])
             else:
                 tgt_ids = torch.cat([v["labels"] for v in targets])
                 tgt_bbox = torch.cat([v["boxes"] for v in targets])
+                sizes = [len(v["boxes"]) for v in targets]
                 # tgt_feat_ids = torch.cat([v["ids"] for v in targets])
 
             # Compute the classification cost.
@@ -119,7 +121,6 @@ class HungarianMatcher(nn.Module):
                 C[batch_ref_idx, matched_out_idx, tgt_ref_idx] = 0.0
 
             C = C.cpu()
-            sizes = [len(v["boxes"]) for v in targets]
             indices = [linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))]
             return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
 
@@ -145,9 +146,9 @@ class ReferTrackMatcher(nn.Module):
         self.cost_feat = cost_feat
         self.dist_thr = dist_thr
         self.cost_limit = cost_limit
-        assert cost_emb != 0 or cost_loc != 0, "all costs cant be 0"
+        assert cost_feat != 0 or cost_loc != 0, "all costs cant be 0"
     
-    def cosine_distance(x1, x2, eps=1e-8):
+    def cosine_distance(self, x1, x2, eps=1e-8):
         w1 = x1.norm(p=2, dim=1, keepdim=True)
         w2 = x2.norm(p=2, dim=1, keepdim=True)
         return 1 - torch.mm(x1, x2.t()) / (w1 * w2.t()).clamp(min=eps)
@@ -184,13 +185,18 @@ class ReferTrackMatcher(nn.Module):
             # Also concat the target labels and boxes
             ref_features = torch.cat([v["ref_features"] for v in references])
             ref_boxes = torch.cat([v["ref_boxes"] for v in references])
+            input_size = torch.cat([v["input_size"] for v in references])
+            scale = torch.cat([input_size, input_size], dim=1)
+            ref_boxes = box_cxcywh_to_xyxy(ref_boxes) * scale
+            pred_boxes = box_cxcywh_to_xyxy(pred_boxes) * scale
             assert len(ref_features) == len(ref_boxes)
 
             # Compute the feature similarity
             cost_feature = self.cosine_distance(id_features, ref_features)
             # Compute the distance ** 2 between boxes 
-            cost_distance = torch.pow(torch.cdist(pred_boxes, ref_boxes, p=2), 2)
-            cost_feature[cost_distance>self.dist_thr] = inf
+            cost_distance = torch.cdist(pred_boxes, ref_boxes, p=2)
+            # TODO use dist_thr or not
+            # cost_feature[cost_distance>self.dist_thr] = inf
 
             # Final cost matrix
             C = self.cost_feat * cost_feature + (1 - self.cost_feat) * cost_distance
@@ -200,9 +206,11 @@ class ReferTrackMatcher(nn.Module):
             sizes = [len(v["ref_boxes"]) for v in references]
             ref_indices = [lap.lapjv(c[i].data.cpu().numpy(), extend_cost=True,
                 cost_limit=self.cost_limit)[1] for i, c in enumerate(C.split(sizes, -1))]
+            ori_indices = [(torch.as_tensor(torch.range(0, len(idx)-1)[idx>=0], dtype=torch.int64), torch.as_tensor(idx[
+                idx>=0], dtype=torch.int64).long()) for i, idx in enumerate(ref_indices)]
             ref_indices = [(torch.as_tensor(torch.range(0, len(idx)-1)[idx>=0], dtype=torch.int64), r['idx_map'][torch.as_tensor(idx[
                 idx>=0], dtype=torch.int64)].long()) for i, (r, idx) in enumerate(zip(references, ref_indices))]
-            return ref_indices
+            return ori_indices, ref_indices
 
 
 def build_matcher(cfg):

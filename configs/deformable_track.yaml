@@ -15,9 +15,9 @@ DATASET:
   SCALES: [608, 640, 672, 704, 736, 768, 800]
   PREFIX: ''
 MODEL:
-  FILE: deformable_bastrack
-  NAME: DeformableBaseTrack
-  RESUME_PATH: 'output/deformable_motid_right_DeformableBaseTrack_epoch015_checkpoint.pth'
+  FILE: deformable_track
+  NAME: DeformableTrack
+  RESUME_PATH: 'output/deformable_motid_right_DeformableBaseTrack_epoch050_checkpoint.pth'
 BACKBONE:
   NAME: resnet50
   DIALATION: False
@@ -52,7 +52,7 @@ LOSS:
   FOCAL_ALPHA: 0.25
 TRAINER:
   FILE: det_trainer
-  NAME: DetTrainer
+  NAME: TrackTrainer
 TRAIN:
   LR: 0.0001
   LR_BACKBONE: 0.00001
@@ -61,10 +61,10 @@ TRAIN:
   LR_PROJ_NAMES: ['reference_points', 'sampling_offsets']
   MOMENTUM: 0.9
   WEIGHT_DECAY: 0.0001
-  LR_DROP: 12 #40
-  MAX_EPOCH: 20 #50
-  PRINT_FREQ: 20
-  SAVE_INTERVAL: 5 #5
+  LR_DROP: 20 #40
+  MAX_EPOCH: 30 #50
+  PRINT_FREQ: 5 #20
+  SAVE_INTERVAL: 1 #5
   SAVE_EVERY_CHECKPOINT: True
   VAL_WHEN_TRAIN: False
   CLIP_MAX_NORM: 0.1

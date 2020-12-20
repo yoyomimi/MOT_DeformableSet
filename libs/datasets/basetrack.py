@@ -24,6 +24,8 @@ class BaseTrackDataset(Dataset):
 
         video_anno = {}
         for img_dir in os.listdir(data_root):
+            if img_dir.split('-')[-1] != 'SDP':
+                continue
             seq_path = os.path.join(data_root, img_dir, 'seqinfo.ini')
             f = open(seq_path)
             seq_info = f.readlines()
@@ -179,7 +181,7 @@ class BaseTrackDataset(Dataset):
         labels = target['labels']
         ori_next_boxes = next_target['boxes']
         ori_next_labels = next_target['labels']
-        assert len(dataset_track_ids) == boxes
+        assert len(dataset_track_ids) == len(boxes)
         assert len(next_dataset_track_ids) == len(ori_next_boxes)
         # match track_id
         match_mask = []
@@ -189,15 +191,13 @@ class BaseTrackDataset(Dataset):
             if len(match_index) > 0:
                 match_mask.append(match_index[0])
                 valid_pre_mask.append(pre_idx)
-        match_mask = torch.stack(match_mask).reshape(-1, ).long()
-        valid_pre_mask = torch.stack(valid_pre_mask).reshape(-1, ).long()
+        match_mask = torch.as_tensor(match_mask).reshape(-1, ).long()
+        valid_pre_mask = torch.as_tensor(valid_pre_mask).reshape(-1, ).long()
 
         next_boxes = torch.zeros(boxes.shape)
         next_boxes[valid_pre_mask] = ori_next_boxes[match_mask]
         next_labels = np.zeros(labels.shape)
         next_labels[valid_pre_mask] = ori_next_labels[match_mask]
-        next_vis_ratios = np.zeros(vis_ratios.shape)
-        next_vis_ratios[valid_pre_mask] = next_vis_ratios[match_mask]
     
         # TODO map_idx, matched_idx, next_boxes, for the joint training
         ref_boxes = torch.cat([next_boxes[valid_pre_mask, :2], boxes[
@@ -214,6 +214,5 @@ class BaseTrackDataset(Dataset):
             idx_map=match_mask,
             matched_idx=valid_pre_mask,
             ref_boxes=ref_boxes,
-
         )
         return img, next_img, out_target, video_name

@@ -169,14 +169,18 @@ class DeformableTransformer(nn.Module):
             topk_coords_unact = torch.gather(enc_outputs_coord_unact, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, 4))
             topk_coords_unact = topk_coords_unact.detach()
             reference_points = topk_coords_unact.sigmoid()
+            topk_enc_id_embeds = torch.gather(enc_outputs_id_embeds, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, enc_outputs_id_embeds.shape[-1]))
 
-            if self.refer_matcher is not None and references is not None:
-                enc_outputs = None
-                ref_indices = self.refer_matcher(enc_outputs, references)
+            if refer_matcher is not None and references is not None:
+                enc_outputs = dict(
+                    id_features=topk_enc_id_embeds,
+                    pred_boxes=reference_points
+                )
+                ori_indices, ref_indices = refer_matcher(enc_outputs, references)
                 batch_ref_idx = torch.cat([torch.full_like(out_idx, i) for i, (
-                    out_idx, _) in enumerate(ref_indices)])
-                matched_out_idx = torch.cat([out_idx for (out_idx, _) in ref_indices])
-                ref_boxes = torch.cat([r["ref_boxes"][idx] for r, (_, idx) in zip(references, ref_indices)])
+                    out_idx, _) in enumerate(ori_indices)])
+                matched_out_idx = torch.cat([out_idx for (out_idx, _) in ori_indices])
+                ref_boxes = torch.cat([r["ref_boxes"][idx] for r, (_, idx) in zip(references, ori_indices)])
                 reference_points[batch_ref_idx, matched_out_idx] = ref_boxes
             else:
                 ref_indices = None
