@@ -69,6 +69,7 @@ class TrackTrainer(BaseTrainer):
         ### Modified ###
         indices = self.criterion.out_indices
         out_id_features = self.model.out_id_features.detach()
+        out_pred_next_boxes = self.model.out_pred_next_boxes.detach()
         assert len(indices) == len(targets)
         references = []
         for i in range(len(indices)):
@@ -77,9 +78,11 @@ class TrackTrainer(BaseTrainer):
             idx_map = targets[i]['idx_map']
             ref_boxes = targets[i]['ref_boxes']
             id_features = out_id_features[i]
+            pred_next_boxes = out_pred_next_boxes[i]
             assert len(src) == len(id_features)
             valid_idx = [torch.where(tgt==idx)[0][0] for idx in matched_idx]
             prev_features = id_features[src[torch.stack(valid_idx)]]
+            # ref_boxes = pred_next_boxes[src[torch.stack(valid_idx)]]
             references.append(dict(ref_features=prev_features, ref_boxes=ref_boxes, idx_map=idx_map))
         if len(references) == 0:
             references = None

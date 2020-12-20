@@ -259,6 +259,8 @@ class DeformableBaseTrack(nn.Module):
         outputs_id_features = torch.stack(outputs_id_features)
         outputs_next_center = torch.stack(outputs_next_centers)
         self.out_id_features = outputs_id_features[-1].clone()
+        self.out_pred_next_boxes = outputs_coord[-1].clone()
+        self.out_pred_next_boxes[..., :2] = outputs_next_center[-1]
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
                'id_embeds': outputs_id_embed[-1], 'id_features': outputs_id_features[-1]
                'next_cenetrs': outputs_next_center[-1]
