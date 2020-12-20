@@ -22,7 +22,7 @@ import _init_paths
 from configs import cfg
 from configs import update_config
 
-from libs.datasets.collate import collect
+from libs.datasets.collate import collect, joint_collect
 from libs.utils import misc
 from libs.utils.utils import create_logger
 from libs.utils.utils import get_model
@@ -209,7 +209,7 @@ def main_per_worker():
         # shuffle=False,
         shuffle=(train_sampler is None),
         drop_last=True,
-        collate_fn=collect,
+        collate_fn=joint_collect,
         num_workers=cfg.WORKERS,
         pin_memory=True,
         sampler=train_sampler

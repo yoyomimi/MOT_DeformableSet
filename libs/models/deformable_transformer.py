@@ -169,16 +169,17 @@ class DeformableTransformer(nn.Module):
             topk_coords_unact = torch.gather(enc_outputs_coord_unact, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, 4))
             topk_coords_unact = topk_coords_unact.detach()
             reference_points = topk_coords_unact.sigmoid()
-            
+
             if self.refer_matcher is not None and references is not None:
-                # TODO replace ref points
                 enc_outputs = None
-                ref_indices = refer_matcher(enc_outputs, references)
+                ref_indices = self.refer_matcher(enc_outputs, references)
+                batch_ref_idx = torch.cat([torch.full_like(out_idx, i) for i, (
+                    out_idx, _) in enumerate(ref_indices)])
+                matched_out_idx = torch.cat([out_idx for (out_idx, _) in ref_indices])
+                ref_boxes = torch.cat([r["ref_boxes"][idx] for r, (_, idx) in zip(references, ref_indices)])
+                reference_points[batch_ref_idx, matched_out_idx] = ref_boxes
             else:
                 ref_indices = None
-
-
-
             init_reference_out = reference_points
             pos_trans_out = self.pos_trans_norm(self.pos_trans(self.get_proposal_pos_embed(topk_coords_unact)))
             query_embed, tgt = torch.split(pos_trans_out, c, dim=2)

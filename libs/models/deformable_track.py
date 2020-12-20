@@ -258,7 +258,7 @@ class DeformableBaseTrack(nn.Module):
         outputs_id_embed = torch.stack(outputs_id_embeds)
         outputs_id_features = torch.stack(outputs_id_features)
         outputs_next_center = torch.stack(outputs_next_centers)
-
+        self.out_id_features = outputs_id_features[-1].clone()
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
                'id_embeds': outputs_id_embed[-1], 'id_features': outputs_id_features[-1]
                'next_cenetrs': outputs_next_center[-1]
@@ -304,7 +304,7 @@ class SetCriterion(nn.Module):
         self.losses = losses
         self.focal_alpha = focal_alpha
         
-    def loss_labels(self, outputs, targets, indices, num_boxes, log=True):
+    def loss_labels(self, outputs, targets, indices, num_boxes, log=True, is_next=False):
         """Classification loss (NLL)
         targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
         """
@@ -312,7 +312,10 @@ class SetCriterion(nn.Module):
         src_logits = outputs['pred_logits']
 
         idx = self._get_src_permutation_idx(indices)
-        target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
+        if is_next is True:
+            target_classes_o = torch.cat([t["next_labels"][J] for t, (_, J) in zip(targets, indices)])
+        else:
+            target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
         target_classes = torch.full(src_logits.shape[:2], self.num_classes,
                                     dtype=torch.int64, device=src_logits.device)
         target_classes[idx] = target_classes_o
@@ -331,20 +334,23 @@ class SetCriterion(nn.Module):
         return losses
 
     @torch.no_grad()
-    def loss_cardinality(self, outputs, targets, indices, num_boxes):
+    def loss_cardinality(self, outputs, targets, indices, num_boxes, is_next=False):
         """ Compute the cardinality error, ie the absolute error in the number of predicted non-empty boxes
         This is not really a loss, it is intended for logging purposes only. It doesn't propagate gradients
         """
         pred_logits = outputs['pred_logits']
         device = pred_logits.device
-        tgt_lengths = torch.as_tensor([len(v["labels"]) for v in targets], device=device)
+        if is_next is True:
+            tgt_lengths = torch.as_tensor([len(v["next_labels"]) for v in targets], device=device)
+        else:
+            tgt_lengths = torch.as_tensor([len(v["labels"]) for v in targets], device=device)
         # Count the number of predictions that are NOT "no-object" (which is the last class)
         card_pred = (pred_logits.argmax(-1) != pred_logits.shape[-1] - 1).sum(1)
         card_err = F.l1_loss(card_pred.float(), tgt_lengths.float())
         losses = {'cardinality_error': card_err}
         return losses
 
-    def loss_boxes(self, outputs, targets, indices, num_boxes, log=True):
+    def loss_boxes(self, outputs, targets, indices, num_boxes, log=True, is_next=False):
         """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
            targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
            The target boxes are expected in format (center_x, center_y, h, w), normalized by the image size.
@@ -353,10 +359,13 @@ class SetCriterion(nn.Module):
         losses = {}
         idx = self._get_src_permutation_idx(indices)
         src_boxes = outputs['pred_boxes'][idx]
-        target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
-
         ###### modified ##########
-        target_ids = torch.cat([t['ids'][i] for t, (_, i) in zip(targets, indices)], dim=0).long()
+        if is_next is True:
+            target_boxes = torch.cat([t['next_boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+            target_ids = torch.cat([t['next_ids'][i] for t, (_, i) in zip(targets, indices)], dim=0).long()
+        else:
+            target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+            target_ids = torch.cat([t['ids'][i] for t, (_, i) in zip(targets, indices)], dim=0).long()
         valids_ids = torch.where(target_ids>-1)[0]
         target_ids = target_ids[valids_ids]
         outputs_src_id_logits = outputs['id_embeds'][idx][valids_ids].contiguous()
@@ -373,12 +382,14 @@ class SetCriterion(nn.Module):
             losses['id_class_error'] = 100 - accuracy(outputs_src_id_logits, target_ids)[0]
 
         if outputs['next_cenetrs'] is not None:
-            src_next_centers = outputs['next_cenetrs'][idx][valids_ids]
-            target_next_centers = torch.cat([t['next_centers'][i] for t, (_, i) in zip(targets, indices)], dim=0)
-            loss_next_cenetrs = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
-            losses['loss_next_cenetrs'] = loss_next_cenetrs.sum() / num_boxes
+            if is_next is True:
+                losses['loss_next_cenetrs'] = torch.Tensor([0.]).mean().to(src_boxes.device)
+            else:
+                src_next_centers = outputs['next_cenetrs'][idx][valids_ids]
+                target_next_centers = torch.cat([t['next_centers'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+                loss_next_cenetrs = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
+                losses['loss_next_cenetrs'] = loss_next_cenetrs.sum() / num_boxes
         ##########################
-
         loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
         losses['loss_bbox'] = loss_bbox.sum() / num_boxes
 
@@ -409,7 +420,7 @@ class SetCriterion(nn.Module):
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
         return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
 
-    def forward(self, outputs, targets, ref_indices=None):
+    def forward(self, outputs, targets, ref_indices=None, is_next=False):
         """ This performs the loss computation.
         Parameters:
              outputs: dict of tensors, see the output specification of the model for the format
@@ -423,9 +434,9 @@ class SetCriterion(nn.Module):
                 "idx_map": Tensor of dim [num_refer_boxes, num_targets], map the refer index to the target index
         """
         outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs' and k != 'enc_outputs'}
-
+  
         # Retrieve the matching between the outputs of the last layer and the targets
-        indices = self.matcher(outputs_without_aux, targets, ref_indices)
+        indices = self.matcher(outputs_without_aux, targets, ref_indices, is_next)
         self.out_indices = indices
         # Compute the average number of target boxes accross all nodes, for normalization purposes
         num_boxes = sum(len(t["labels"]) for t in targets)
@@ -443,9 +454,10 @@ class SetCriterion(nn.Module):
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
         if 'aux_outputs' in outputs:
             for i, aux_outputs in enumerate(outputs['aux_outputs']):
-                indices = self.matcher(aux_outputs, targets, ref_indices)
+                indices = self.matcher(aux_outputs, targets, ref_indices, is_next)
                 for loss in self.losses:
                     kwargs = {}
+                    kwargs['is_next'] = is_next
                     if loss == 'labels':
                         # Logging is enabled only for the last layer
                         kwargs['log'] = False
@@ -458,7 +470,7 @@ class SetCriterion(nn.Module):
             bin_targets = copy.deepcopy(targets)
             for bt in bin_targets:
                 bt['labels'] = torch.zeros_like(bt['labels'])
-            indices = self.matcher(enc_outputs, bin_targets, ref_indices)
+            indices = self.matcher(enc_outputs, bin_targets, ref_indices, is_next)
             for loss in self.losses:
                 kwargs = {}
                 if loss == 'labels':

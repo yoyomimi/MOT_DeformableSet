@@ -45,7 +45,7 @@ class HungarianMatcher(nn.Module):
         self.cost_ids = cost_ids
         assert cost_class != 0 or cost_bbox != 0 or cost_giou != 0 or cost_ids != 0, "all costs cant be 0"
 
-    def forward(self, outputs, ref_indices=None, inf=1e10):
+    def forward(self, outputs, ref_indices=None, , is_next=False, inf=1e10):
         """ Performs the matching
 
         Params:
@@ -73,8 +73,14 @@ class HungarianMatcher(nn.Module):
             out_bbox = outputs["pred_boxes"].flatten(0, 1)  # [batch_size * num_queries, 4]
 
             # Also concat the target labels and boxes
-            tgt_ids = torch.cat([v["labels"] for v in targets])
-            tgt_bbox = torch.cat([v["boxes"] for v in targets])    
+            if is_next is True:
+                tgt_ids = torch.cat([v["next_labels"] for v in targets])
+                tgt_bbox = torch.cat([v["next_boxes"] for v in targets])
+                # tgt_feat_ids = torch.cat([v["next_ids"] for v in targets])
+            else:
+                tgt_ids = torch.cat([v["labels"] for v in targets])
+                tgt_bbox = torch.cat([v["boxes"] for v in targets])
+                # tgt_feat_ids = torch.cat([v["ids"] for v in targets])
 
             # Compute the classification cost.
             alpha = 0.25
@@ -94,7 +100,6 @@ class HungarianMatcher(nn.Module):
             
             # feat ids
             # out_feat_logits = outputs['id_embeds'].flatten(0, 1).contiguous().sigmoid()
-            # tgt_feat_ids = torch.cat([v["ids"] for v in targets])
             # valids_ids = torch.where(tgt_feat_ids>-1)[0]
             # if len(valid_ids) == len(tgt_bbox):
             #     neg_cost_ids = (1 - alpha) * (out_feat_logits ** gamma) * (-(1 - out_feat_logits + 1e-8).log())
@@ -104,14 +109,14 @@ class HungarianMatcher(nn.Module):
 
             C = C.view(bs, num_queries, -1)
 
-            if ref_indices is not None:
-                batch_ref_indexes = torch.cat([torch.full_like(out_idx, i) for i, (
+            if is_next is True and ref_indices is not None:
+                batch_ref_idx = torch.cat([torch.full_like(out_idx, i) for i, (
                     out_idx, _) in enumerate(ref_indices)])
                 matched_out_idx = torch.cat([out_idx for (out_idx, _) in ref_indices])
                 tgt_ref_idx = torch.cat([tgt_idx for (_, tgt_idx) in ref_indices])
-                C[batch_ref_indexes, matched_out_idx] = inf
-                C[batch_ref_indexes, ..., tgt_ref_idx] = inf 
-                C[batch_ref_indexes, matched_out_idx, tgt_ref_idx] = 0.0
+                C[batch_ref_idx, matched_out_idx] = inf
+                C[batch_ref_idx, ..., tgt_ref_idx] = inf 
+                C[batch_ref_idx, matched_out_idx, tgt_ref_idx] = 0.0
 
             C = C.cpu()
             sizes = [len(v["boxes"]) for v in targets]

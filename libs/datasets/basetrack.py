@@ -149,34 +149,22 @@ class BaseTrackDataset(Dataset):
             raise FileNotFoundError
         next_img = Image.open(next_img_path).convert('RGB')
         assert next_img.size == img.size
-
-        # match track_id
-        next_track_ids = next_anno['track_ids']
-        match_mask = []
-        valid_pre_mask = []
-        for pre_idx, tid in enumerate(anno['track_ids']):
-            match_index = np.where(next_track_ids==tid)[0]
-            if len(match_index) > 0:
-                match_mask.append(match_index[0])
-                valid_pre_mask.append(pre_idx)
-        next_boxes = np.zeros(boxes.shape)
-        next_boxes[valid_pre_mask] = next_anno['boxes'][match_mask]
-        next_labels = np.zeros(labels.shape)
-        next_labels[valid_pre_mask] = next_anno['labels'][match_mask]
-        next_vis_ratios = np.zeros(vis_ratios.shape)
-        next_vis_ratios[valid_pre_mask] = next_anno['vis_ratios'][match_mask]
-        if len(next_boxes) == 0:
-            next_boxes = np.array([])
-            next_labels = np.array([])
+        ori_next_boxes = next_anno['boxes']
+        ori_next_labels = next_anno['labels']
+        next_dataset_track_ids = next_anno['dataset_track_ids']
+        next_vis_ratios = next_anno['vis_ratios']
+        num_object = min(len(ori_next_boxes), self.max_objs)
+        if num_object == 0:
+            ori_next_boxes = np.array([])
+            ori_next_labels = np.array([])
             next_vis_ratios = np.array([])
-        next_boxes = torch.from_numpy(next_boxes.reshape(-1, 4).astype(np.float32))
-        next_labels = torch.from_numpy(next_labels.reshape(-1, ).astype(np.int64))
-        next_vis_ratios = torch.from_numpy(next_vis_ratios.reshape(-1, ).astype(np.float32))
-        match_mask = torch.from_numpy(np.array(match_mask).reshape(-1, ).astype(np.int64))
+        ori_next_boxes = torch.from_numpy(ori_next_boxes.reshape(-1, 4)[:num_object].astype(np.float32))
+        ori_next_labels = torch.from_numpy(ori_next_labels.reshape(-1, )[:num_object].astype(np.int64))
+        next_vis_ratios = torch.from_numpy(next_vis_ratios.reshape(-1, )[:num_object].astype(np.float32))
+        next_dataset_track_ids = torch.from_numpy(next_dataset_track_ids.reshape(-1, )[:num_object].astype(np.float32))
         next_target = dict(
-            boxes=next_boxes,
-            labels=next_labels,
-            vis_ratios=next_vis_ratios,
+            boxes=ori_next_boxes,
+            labels=ori_next_labels,
         )
         img_list = [img, next_img]
         target_list = [target, next_target]
@@ -184,17 +172,48 @@ class BaseTrackDataset(Dataset):
             img_list, target_list = self.transform(
                 img_list, target_list
             )
-
-        img, _ = img_list
+        img, next_img = img_list
         target, next_target = target_list
+
+        boxes = target['boxes']
+        labels = target['labels']
+        ori_next_boxes = next_target['boxes']
+        ori_next_labels = next_target['labels']
+        assert len(dataset_track_ids) == boxes
+        assert len(next_dataset_track_ids) == len(ori_next_boxes)
+        # match track_id
+        match_mask = []
+        valid_pre_mask = []
+        for pre_idx, tid in enumerate(dataset_track_ids):
+            match_index = torch.where(next_dataset_track_ids==tid)[0]
+            if len(match_index) > 0:
+                match_mask.append(match_index[0])
+                valid_pre_mask.append(pre_idx)
+        match_mask = torch.stack(match_mask).reshape(-1, ).long()
+        valid_pre_mask = torch.stack(valid_pre_mask).reshape(-1, ).long()
+
+        next_boxes = torch.zeros(boxes.shape)
+        next_boxes[valid_pre_mask] = ori_next_boxes[match_mask]
+        next_labels = np.zeros(labels.shape)
+        next_labels[valid_pre_mask] = ori_next_labels[match_mask]
+        next_vis_ratios = np.zeros(vis_ratios.shape)
+        next_vis_ratios[valid_pre_mask] = next_vis_ratios[match_mask]
+    
         # TODO map_idx, matched_idx, next_boxes, for the joint training
+        ref_boxes = torch.cat([next_boxes[valid_pre_mask, :2], boxes[
+            valid_pre_mask, 2:]], dim=1)
+        assert ref_boxes.shape[-1] == 4
         out_target = dict(
-            boxes=target['boxes'],
-            ids=target['ids'],
-            next_centers=next_target['boxes'][..., :2],
-            labels=target['labels'],
-            vis_ratios=target['vis_ratios'],
-            next_vis_ratios=next_target['vis_ratios'],
-            match_mask=match_mask
+            boxes=boxes,
+            next_boxes=ori_next_boxes,
+            ids=dataset_track_ids,
+            next_ids=next_dataset_track_ids,
+            next_centers=next_boxes[..., :2],
+            labels=labels,
+            next_labels=ori_next_labels,
+            idx_map=match_mask,
+            matched_idx=valid_pre_mask,
+            ref_boxes=ref_boxes,
+
         )
-        return img, out_target, video_name
+        return img, next_img, out_target, video_name

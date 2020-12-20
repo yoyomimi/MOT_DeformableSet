@@ -27,7 +27,7 @@ from libs.utils.utils import write_dict_to_json
 
 
 
-class DetTrainer(BaseTrainer):
+class TrackTrainer(BaseTrainer):
 
     def __init__(self,
                  cfg,
@@ -53,29 +53,39 @@ class DetTrainer(BaseTrainer):
         self.prev_features = None
         
     def _read_inputs(self, inputs):
-        imgs, targets, filenames = inputs
+        imgs, next_imgs, targets, filenames = inputs
         imgs = [img.to(self.device) for img in imgs]
+        next_imgs = [img.to(self.device) for img in next_imgs]
         # targets are list type in det tasks
         targets = [{k: v.to(self.device) for k, v in t.items()} for t in targets]
-        return imgs, targets
+        return imgs, next_imgs, targets
 
     def _forward(self, data):
         imgs = data[0]
-        targets = data[1]
+        next_imgs = data[1]
+        targets = data[2]
         outputs = self.model(imgs)
-        loss_dict = self.criterion(outputs, targets, self.model.ref_indices)
+        loss_dict_prev = self.criterion(outputs, targets)
         ### Modified ###
         indices = self.criterion.out_indices
-        # TODO use indices and targets to collect detached features in order as macthed_boxes
-        # in target prev->next: idx_map; selected matched boxes: macthed_idx
-        self.prev_features.detach()
-        if self.prev_features is not None:
-            references = [dict(ref_features=f, ref_boxes=t['macthed_boxes'], idx_map=t['idx_map'])
-                             for f, t in zip(self.prev_features, targets)]
-        else:
+        out_id_features = self.model.out_id_features.detach()
+        assert len(indices) == len(targets)
+        references = []
+        for i in range(len(indices)):
+            src, tgt = indices[i]
+            matched_idx = targets[i]['matched_idx']
+            idx_map = targets[i]['idx_map']
+            ref_boxes = targets[i]['ref_boxes']
+            id_features = out_id_features[i]
+            assert len(src) == len(id_features)
+            valid_idx = [torch.where(tgt==idx)[0][0] for idx in matched_idx]
+            prev_features = id_features[src[torch.stack(valid_idx)]]
+            references.append(dict(ref_features=prev_features, ref_boxes=ref_boxes, idx_map=idx_map))
+        if len(references) == 0:
             references = None
         outputs = self.model(next_imgs, references)
-        loss_dict_next = self.criterion(outputs, next_targets, self.model.ref_indices)
+        loss_dict_next = self.criterion(outputs, next_targets, self.model.ref_indices, is_next=True)
+        loss_dict = {k: (v + loss_dict_next[k]).mean() for k, v in loss_dict_prev.items()}
         ##########
         return loss_dict
 
