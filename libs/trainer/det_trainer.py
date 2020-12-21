@@ -85,7 +85,7 @@ class TrackTrainer(BaseTrainer):
             valid_idx = [torch.where(tgt==idx)[0][0] for idx in matched_idx]
             prev_features = id_features[src[torch.as_tensor(valid_idx).reshape(-1, ).long()]]
             input_size = torch.as_tensor([imgs[i].shape[2], imgs[i].shape[1]]).reshape(1, 2).long()
-            # ref_boxes = pred_next_boxes[src[torch.stack(valid_idx)]]
+            ref_boxes = pred_next_boxes[src[torch.as_tensor(valid_idx).reshape(-1, ).long()]]
             references.append(dict(ref_features=prev_features, ref_boxes=ref_boxes, idx_map=idx_map,
                                    input_size=input_size))
         if len(references) == 0:

@@ -260,10 +260,11 @@ class DeformableTrack(nn.Module):
         outputs_next_center = torch.stack(outputs_next_centers)
         self.out_id_features = outputs_id_features[-1].clone()
         self.out_pred_next_boxes = outputs_coord[-1].clone()
-        self.out_pred_next_boxes[..., :2] = outputs_next_center[-1]
+        self.out_pred_next_boxes[..., :2] = self.out_pred_next_boxes[..., :2]
+        motion = outputs_next_center[-1] - outputs_coord[-1][..., :2]
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
                'id_embeds': outputs_id_embed[-1], 'id_features': outputs_id_features[-1],
-               'next_centers': outputs_next_center[-1]
+               'next_centers': outputs_next_center[-1], 'motions': motion
                }
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord,
@@ -498,7 +499,7 @@ class PostProcess(nn.Module):
     """ This module converts the model's output into the format expected by the coco api"""
 
     @torch.no_grad()
-    def forward(self, outputs, filename, target_sizes):
+    def forward(self, outputs, filename, target_sizes, ref_indices=None):
         """ Perform the computation
         Parameters:
             outputs: raw outputs of the model
@@ -508,9 +509,16 @@ class PostProcess(nn.Module):
         """
         out_logits, out_bbox = outputs['pred_logits'], outputs['pred_boxes']
         id_features = outputs['id_features']
+        motions = outputs['motions']
 
         assert len(out_logits) == len(target_sizes)
         assert target_sizes.shape[1] == 2
+        track_idx = -torch.ones(out_bbox.shape[1]).long()
+        # TODO get strack idx map with box
+        if ref_indices is not None:
+            assert len(ref_indices) == 1
+            src_idx, tgt_idx = ref_indices[0]
+            track_idx[src_idx] = tgt_idx
 
         prob = out_logits.sigmoid()
         topk_values, topk_indexes = torch.topk(prob.view(out_logits.shape[0], -1), 100, dim=1)
@@ -524,12 +532,16 @@ class PostProcess(nn.Module):
         img_h, img_w = target_sizes.unbind(1)
         scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
         boxes = boxes * scale_fct[:, None, :]
-
+        
+        
         filenames = [filename] * len(scores)
         results = [{'filename': f, 'scores': s, 'labels': l, 'boxes': b} for f, s, l, b in zip(
             filenames, scores, labels, boxes)]
         results[-1]['id_features'] =  id_features.reshape(-1, id_features.shape[
             -1])[topk_boxes[0]]
+        results[-1]['motions'] =  motions.reshape(-1, motions.shape[
+            -1])[topk_boxes[0]]
+        results[-1]['track_idx'] = track_idx[topk_boxes[0]]
 
         return results
 

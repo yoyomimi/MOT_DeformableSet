@@ -1,4 +1,4 @@
-OUTPUT_ROOT: deformable_track
+OUTPUT_ROOT: deformable_track_refine
 DIST_BACKEND: 'nccl'
 WORKERS: 4
 DEVICE: cuda
@@ -17,7 +17,7 @@ DATASET:
 MODEL:
   FILE: deformable_track
   NAME: DeformableTrack
-  RESUME_PATH: 'output/deformable_motid_right_DeformableBaseTrack_epoch050_checkpoint.pth'
+  RESUME_PATH: 'output/deformable_track_DeformableTrack_epoch012_checkpoint.pth'
 BACKBONE:
   NAME: resnet50
   DIALATION: False
@@ -54,15 +54,15 @@ TRAINER:
   FILE: det_trainer
   NAME: TrackTrainer
 TRAIN:
-  LR: 0.0001
+  LR: 0.00001
   LR_BACKBONE: 0.00001
   LR_BACKBONE_NAMES: ["backbone.0"]
   LR_PROJ_MULT: 0.1
   LR_PROJ_NAMES: ['reference_points', 'sampling_offsets']
   MOMENTUM: 0.9
   WEIGHT_DECAY: 0.0001
-  LR_DROP: 20 #40
-  MAX_EPOCH: 30 #50
+  LR_DROP: 10 #40
+  MAX_EPOCH: 15 #50
   PRINT_FREQ: 5 #20
   SAVE_INTERVAL: 1 #5
   SAVE_EVERY_CHECKPOINT: True

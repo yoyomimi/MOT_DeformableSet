@@ -177,6 +177,7 @@ class DeformableTransformer(nn.Module):
                     pred_boxes=reference_points
                 )
                 ori_indices, ref_indices = refer_matcher(enc_outputs, references)
+                self.out_indices = ori_indices
                 batch_ref_idx = torch.cat([torch.full_like(out_idx, i) for i, (
                     out_idx, _) in enumerate(ori_indices)])
                 matched_out_idx = torch.cat([out_idx for (out_idx, _) in ori_indices])
@@ -184,6 +185,7 @@ class DeformableTransformer(nn.Module):
                 reference_points[batch_ref_idx, matched_out_idx] = ref_boxes
             else:
                 ref_indices = None
+                self.out_indices = None
             init_reference_out = reference_points
             pos_trans_out = self.pos_trans_norm(self.pos_trans(self.get_proposal_pos_embed(topk_coords_unact)))
             query_embed, tgt = torch.split(pos_trans_out, c, dim=2)

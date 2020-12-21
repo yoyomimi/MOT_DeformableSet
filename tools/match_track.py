@@ -87,7 +87,7 @@ def read_img(img_path):
     image = F_trans.normalize(image, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     return image
 
-def process_img(img_path, model, postprocessors, device, threshold=0.25):
+def process_img(img_path, model, postprocessors, device, threshold=0.3, references=None):
     model.eval()
     ori_img = cv2.imread(img_path, cv2.IMREAD_COLOR)
     h, w = ori_img.shape[:2]
@@ -97,9 +97,10 @@ def process_img(img_path, model, postprocessors, device, threshold=0.25):
     bs = len(imgs)
     target_sizes = size.expand(bs, 2)
     target_sizes = target_sizes.to(device)
-    outputs_dict = model(imgs)
+    outputs_dict = model(imgs, references)
+    ref_indices = self.model.module.transformer.out_indices
     pred_out = postprocessors(outputs_dict, img_path,
-        target_sizes)
+        target_sizes, ref_indices)
     res = pred_out[-1]
     valid_inds = torch.where(res['scores']>threshold)[0]
     boxes = res['boxes'][valid_inds]
@@ -113,8 +114,15 @@ def process_img(img_path, model, postprocessors, device, threshold=0.25):
         -1, 5).data.cpu().numpy()
     id_features_np = res['id_features'][valid_inds][valid_id].reshape(-1,
         res['id_features'].shape[-1]).data.cpu().numpy()
+    motions_np = res['motions'][valid_inds][valid_id].reshape(-1,
+        res['motions'].shape[-1]).data.cpu().numpy()
+    if references is not None:
+        track_idx = res['track_idx'][valid_inds][valid_id].reshape(
+            -1,).data.cpu().numpy()
+    else:
+        track_idx = np.array([]).reshape(-1,)
     assert len(id_features_np) == len(dets_np)
-    return ori_img, dets_np, id_features_np
+    return ori_img, dets_np, id_features_np, motions_np, track_idx
 
 def write_results(filename, results, data_type, logger=None):
     if data_type == 'mot':
@@ -171,6 +179,7 @@ def eval_seq(cfg, device, img_path_list, model, postprocessors, data_type,
     timer = Timer()
     results = []
     frame_id = 0
+    references = None
     for i, path in enumerate(img_path_list):
         #if i % 8 != 0:
             #continue
@@ -178,8 +187,11 @@ def eval_seq(cfg, device, img_path_list, model, postprocessors, data_type,
             logger.info('Processing frame {} ({:.2f} fps)'.format(frame_id, 1. / max(1e-5, timer.average_time)))
         # run tracking
         timer.tic()
-        ori_img, dets, id_feature = process_img(path, model, postprocessors, device)
-        online_targets = tracker.update(dets, id_feature, logger)
+        ori_img, dets, id_feature, motion, track_idx = process_img(path, model, postprocessors,
+            device, references=references)
+        online_targets, references = tracker.update(dets, id_feature, motion, track_idx, logger)
+        references[0]['input_size'] = torch.as_tensor([ori_img.shape[2], ori_img.shape[1]]).reshape(1, 2).long()
+        references = [{k: v.to(device) for k, v in r.items()} for r in references]
         online_tlwhs = []
         online_ids = []
         #online_scores = []
