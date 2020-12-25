@@ -131,7 +131,7 @@ def fuse_motion(kf, cost_matrix, tracks, detections, only_position=False, lambda
         gating_dim = 2 if only_position else 4
         gating_threshold = kalman_filter.chi2inv95[gating_dim]
     else:
-        measurements = np.asarray([det.tlbr() for det in detections])
+        measurements = np.asarray([det.tlbr for det in detections])
     for row, track in enumerate(tracks):
         if no_kalman is False:
             gating_distance = kf.gating_distance(
@@ -139,7 +139,6 @@ def fuse_motion(kf, cost_matrix, tracks, detections, only_position=False, lambda
             cost_matrix[row, gating_distance > gating_threshold] = np.inf
             cost_matrix[row] = lambda_ * cost_matrix[row] + (1 - lambda_) * gating_distance
         else:
-            import pdb; pdb.set_trace()
-            loc_distance = np.linalg.norm(measurements - track.tlbr(), axis=1).reshape(-1,)
+            loc_distance = np.linalg.norm(measurements - track.tlbr, axis=1).reshape(-1,)
             cost_matrix[row] = lambda_ * cost_matrix[row] + (1 - lambda_) * loc_distance
     return cost_matrix

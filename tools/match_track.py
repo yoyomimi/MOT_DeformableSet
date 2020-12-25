@@ -22,7 +22,7 @@ from configs import cfg
 from configs import update_config
 from libs.datasets.collate import collect
 from libs.datasets.transform import EvalTransform
-from libs.models.tracker.multitracker import JDETracker
+from libs.models.tracker.simple_multitracker import SimpleTracker
 from libs.tracking_utils import visualization as vis
 from libs.tracking_utils.timer import Timer
 from libs.tracking_utils.evaluation import Evaluator
@@ -87,7 +87,7 @@ def read_img(img_path):
     image = F_trans.normalize(image, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     return image
 
-def process_img(img_path, model, postprocessors, device, threshold=0.3, references=None):
+def process_img(img_path, model, postprocessors, device, threshold=0.4, references=None):
     model.eval()
     ori_img = cv2.imread(img_path, cv2.IMREAD_COLOR)
     h, w = ori_img.shape[:2]
@@ -98,7 +98,7 @@ def process_img(img_path, model, postprocessors, device, threshold=0.3, referenc
     target_sizes = size.expand(bs, 2)
     target_sizes = target_sizes.to(device)
     outputs_dict = model(imgs, references)
-    ref_indices = self.model.module.transformer.out_indices
+    ref_indices = model.module.transformer.out_indices
     pred_out = postprocessors(outputs_dict, img_path,
         target_sizes, ref_indices)
     res = pred_out[-1]
@@ -175,7 +175,7 @@ def eval_seq(cfg, device, img_path_list, model, postprocessors, data_type,
              min_box_area=100., frame_rate=30, use_cuda=True, logger=None):
     if logger is not None and save_dir and not osp.exists(save_dir):
         os.makedirs(save_dir)
-    tracker = JDETracker(cfg.DATASET.MEAN, cfg.DATASET.STD, frame_rate=frame_rate)
+    tracker = SimpleTracker(frame_rate=frame_rate)
     timer = Timer()
     results = []
     frame_id = 0
@@ -390,12 +390,15 @@ if __name__ == '__main__':
     #               MOT17-14-SDP'''
     # data_root = os.path.join(data_dir, 'data/MOT17/test')
     # val mot17
+    # seqs_str = '''MOT17-02-SDP
+    #               MOT17-04-SDP
+    #               MOT17-05-SDP
+    #               MOT17-09-SDP
+    #               MOT17-10-SDP
+    #               MOT17-11-SDP
+    #               MOT17-13-SDP'''
     seqs_str = '''MOT17-02-SDP
                   MOT17-04-SDP
-                  MOT17-05-SDP
-                  MOT17-09-SDP
-                  MOT17-10-SDP
-                  MOT17-11-SDP
                   MOT17-13-SDP'''
     data_root = os.path.join(data_dir, 'data/MOT17/train')
     # # val mot15

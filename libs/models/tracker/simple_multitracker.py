@@ -57,7 +57,7 @@ class STrack(BaseTrack):
     def multi_predict(stracks):
         if len(stracks) > 0:
             for i in range(len(stracks)):
-                stracks[i]._tlwh = stracks[i].tlwh()
+                stracks[i]._tlwh = stracks[i].tlwh
 
     def re_activate(self, new_track, frame_id, new_id=False):
         self.update_features(new_track.curr_feat)
@@ -141,7 +141,7 @@ class STrack(BaseTrack):
         return 'OT_{}_({}-{})'.format(self.track_id, self.start_frame, self.end_frame)
 
 
-class JDETracker(object):
+class SimpleTracker(object):
     def __init__(self, conf_thres=0.4, track_buffer=30, frame_rate=30,
                  ltrb=True):
         self.tracked_stracks = []  # type: list[STrack]
@@ -172,17 +172,17 @@ class JDETracker(object):
         STrack.multi_predict(self.strack_pool) # pred cur location
         ''' Step 1: Referred association, tracked_indices'''
         # TODO
-
-        ''' Step 2: First association, with embedding'''
-        # TODO
-        detections = [detections[i] for i in u_detection]
-        r_tracked_stracks = [self.strack_pool[i] for i in u_track if self.strack_pool[i].state == TrackState.Tracked]
-
-        dists = matching.embedding_distance(self.strack_pool, detections)
-        dists = matching.fuse_motion(None, dists, self.strack_pool, detections, no_kalman=True)
-        matches, u_track, u_detection = matching.linear_assignment(dists, thresh=0.4)
-        for itracked, idet in matches:
+        u_detection = []
+        u_track = []
+        track_valid =  np.ones(len(self.strack_pool))
+        for idet, itracked in enumerate(track_idx):
+            if itracked >= len(self.strack_pool):
+                import pdb; pdb.set_trace()
+            if itracked < 0:
+                u_detection.append(idet)
+                continue
             track = self.strack_pool[itracked]
+            track_valid[itracked] = 0
             det = detections[idet]
             if track.state == TrackState.Tracked:
                 track.update(detections[idet], self.frame_id)
@@ -190,10 +190,29 @@ class JDETracker(object):
             else:
                 track.re_activate(det, self.frame_id, new_id=False)
                 refind_stracks.append(track)
-
-        ''' Step 3: Second association, with IOU'''
+        
+        ''' Step 2: First association, with embedding'''
+        if len(track_idx) > 0:
+            detections = [detections[i] for i in u_detection]
+            u_track = np.where(track_valid == 1)[0]
+            r_tracked_stracks = [self.strack_pool[i] for i in u_track if self.strack_pool[i].state == TrackState.Tracked]
+        else:
+            r_tracked_stracks = []
+        dists = matching.embedding_distance(r_tracked_stracks, detections)
+        dists = matching.fuse_motion(None, dists, r_tracked_stracks, detections, no_kalman=True)
+        matches, u_track, u_detection = matching.linear_assignment(dists, thresh=0.4)
+        for itracked, idet in matches:
+            track = r_tracked_stracks[itracked]
+            det = detections[idet]
+            if track.state == TrackState.Tracked:
+                track.update(detections[idet], self.frame_id)
+                activated_starcks.append(track)
+            else:
+                track.re_activate(det, self.frame_id, new_id=False)
+                refind_stracks.append(track)
         detections = [detections[i] for i in u_detection]
         r_tracked_stracks = [self.strack_pool[i] for i in u_track if self.strack_pool[i].state == TrackState.Tracked]
+        ''' Step 3: Second association, with IOU'''
         dists = matching.iou_distance(r_tracked_stracks, detections)
         matches, u_track, u_detection = matching.linear_assignment(dists, thresh=0.5)
 
@@ -230,7 +249,7 @@ class JDETracker(object):
             track = detections[inew]
             if track.score < self.det_thresh:
                 continue
-            track.activate(self.kalman_filter, self.frame_id)
+            track.activate(self.frame_id)
             activated_starcks.append(track)
         """ Step 5: Update state"""
         for track in self.lost_stracks:
@@ -263,11 +282,11 @@ class JDETracker(object):
         # TODO return additional references
         references = None
         id_features = torch.cat([torch.as_tensor(track.smooth_feat).reshape(1, -1) for track in self.strack_pool])
-        ref_boxes = torch.cat([torch.as_tensor(track.tlwh()).reshape(1, -1) for track in self.strack_pool])
-        ref_boxes[:2] += 0.5 * ref_boxes[2:]
+        ref_boxes = torch.cat([torch.as_tensor(track.tlwh.reshape(1, -1)) for track in self.strack_pool])
+        ref_boxes[..., :2] += 0.5 * ref_boxes[..., 2:]
         idx_map = torch.range(0, len(ref_boxes)-1)
         references = [
-            dict(ref_features=prev_features, ref_boxes=ref_boxes, idx_map=idx_map)
+            dict(ref_features=id_features.float(), ref_boxes=ref_boxes.float(), idx_map=idx_map)
         ]
         if logger is not None:
             logger.debug('===========Frame {}=========='.format(self.frame_id))
