@@ -87,7 +87,7 @@ def read_img(img_path):
     image = F_trans.normalize(image, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     return image
 
-def process_img(img_path, model, postprocessors, device, threshold=0.4, references=None):
+def process_img(img_path, model, postprocessors, device, threshold=0.3, references=None):
     model.eval()
     ori_img = cv2.imread(img_path, cv2.IMREAD_COLOR)
     h, w = ori_img.shape[:2]
@@ -381,14 +381,14 @@ if __name__ == '__main__':
     #               Venice-1'''
     # data_root = os.path.join(data_dir, 'MOT15/images/test')
     # # test mot17
-    # seqs_str = '''MOT17-01-SDP
-    #               MOT17-03-SDP
-    #               MOT17-06-SDP
-    #               MOT17-07-SDP
-    #               MOT17-08-SDP
-    #               MOT17-12-SDP
-    #               MOT17-14-SDP'''
-    # data_root = os.path.join(data_dir, 'data/MOT17/test')
+    seqs_str = '''MOT17-01-SDP
+                  MOT17-03-SDP
+                  MOT17-06-SDP
+                  MOT17-07-SDP
+                  MOT17-08-SDP
+                  MOT17-12-SDP
+                  MOT17-14-SDP'''
+    data_root = os.path.join(data_dir, 'data/MOT17/test')
     # val mot17
     # seqs_str = '''MOT17-02-SDP
     #               MOT17-04-SDP
@@ -397,10 +397,10 @@ if __name__ == '__main__':
     #               MOT17-10-SDP
     #               MOT17-11-SDP
     #               MOT17-13-SDP'''
-    seqs_str = '''MOT17-02-SDP
-                  MOT17-04-SDP
-                  MOT17-13-SDP'''
-    data_root = os.path.join(data_dir, 'data/MOT17/train')
+    # # seqs_str = '''MOT17-02-SDP
+    # #               MOT17-04-SDP
+    # #               MOT17-13-SDP'''
+    # data_root = os.path.join(data_dir, 'data/MOT17/train')
     # # val mot15
     # seqs_str = '''Venice-2
     #               KITTI-13

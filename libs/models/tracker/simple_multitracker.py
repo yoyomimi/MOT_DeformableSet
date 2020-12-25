@@ -198,20 +198,24 @@ class SimpleTracker(object):
             r_tracked_stracks = [self.strack_pool[i] for i in u_track if self.strack_pool[i].state == TrackState.Tracked]
         else:
             r_tracked_stracks = []
-        dists = matching.embedding_distance(r_tracked_stracks, detections)
-        dists = matching.fuse_motion(None, dists, r_tracked_stracks, detections, no_kalman=True)
-        matches, u_track, u_detection = matching.linear_assignment(dists, thresh=0.4)
-        for itracked, idet in matches:
-            track = r_tracked_stracks[itracked]
-            det = detections[idet]
-            if track.state == TrackState.Tracked:
-                track.update(detections[idet], self.frame_id)
-                activated_starcks.append(track)
-            else:
-                track.re_activate(det, self.frame_id, new_id=False)
-                refind_stracks.append(track)
-        detections = [detections[i] for i in u_detection]
-        r_tracked_stracks = [self.strack_pool[i] for i in u_track if self.strack_pool[i].state == TrackState.Tracked]
+
+
+        # dists = matching.embedding_distance(r_tracked_stracks, detections)
+        # dists = matching.fuse_motion(None, dists, r_tracked_stracks, detections, no_kalman=True)
+        # matches, u_track, u_detection = matching.linear_assignment(dists, thresh=0.4)
+        # for itracked, idet in matches:
+        #     track = r_tracked_stracks[itracked]
+        #     det = detections[idet]
+        #     if track.state == TrackState.Tracked:
+        #         track.update(detections[idet], self.frame_id)
+        #         activated_starcks.append(track)
+        #     else:
+        #         track.re_activate(det, self.frame_id, new_id=False)
+        #         refind_stracks.append(track)
+        # detections = [detections[i] for i in u_detection]
+        # r_tracked_stracks = [self.strack_pool[i] for i in u_track if self.strack_pool[i].state == TrackState.Tracked]
+
+
         ''' Step 3: Second association, with IOU'''
         dists = matching.iou_distance(r_tracked_stracks, detections)
         matches, u_track, u_detection = matching.linear_assignment(dists, thresh=0.5)
