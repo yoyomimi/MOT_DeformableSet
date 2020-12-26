@@ -135,7 +135,7 @@ class ReferTrackMatcher(nn.Module):
     def __init__(self,
                  cost_feat: float = 0.98,
                  dist_thr: float = 9.4877,
-                 cost_limit: float = 0.4,
+                 cost_limit: float = 0.5,
                  ):
         """Creates the matcher
 
@@ -177,7 +177,6 @@ class ReferTrackMatcher(nn.Module):
         """
         with torch.no_grad():
             bs, num_queries = enc_outputs["id_features"].shape[:2]
-
             # We flatten to compute the cost matrices in a batch
             id_features = enc_outputs["id_features"].flatten(0, 1)
             pred_boxes = enc_outputs["pred_boxes"].flatten(0, 1) # [batch_size * num_queries, 4]
@@ -187,10 +186,14 @@ class ReferTrackMatcher(nn.Module):
             ref_boxes = torch.cat([v["ref_boxes"] for v in references])
             input_size = torch.cat([v["input_size"] for v in references])
             scale = torch.cat([input_size, input_size], dim=1)
-            ref_boxes = box_cxcywh_to_xyxy(ref_boxes) * scale
-            pred_boxes = box_cxcywh_to_xyxy(pred_boxes) * scale
+            ref_boxes = ref_boxes * scale
+            pred_boxes = pred_boxes * scale
+            ref_boxes[..., 2] /= ref_boxes[..., 3]
+            pred_boxes[..., 2] /= pred_boxes[..., 3]
+            
+            # ref_boxes = box_cxcywh_to_xyxy(ref_boxes)
+            # pred_boxes = box_cxcywh_to_xyxy(pred_boxes)
             assert len(ref_features) == len(ref_boxes)
-
             # Compute the feature similarity
             cost_feature = self.cosine_distance(id_features, ref_features)
             # Compute the distance ** 2 between boxes 

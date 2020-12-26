@@ -22,7 +22,7 @@ from configs import cfg
 from configs import update_config
 from libs.datasets.collate import collect
 from libs.datasets.transform import EvalTransform
-from libs.models.tracker.simple_multitracker import SimpleTracker
+from libs.models.tracker.kalman_multitracker import SimpleKalmanTracker
 from libs.tracking_utils import visualization as vis
 from libs.tracking_utils.timer import Timer
 from libs.tracking_utils.evaluation import Evaluator
@@ -175,7 +175,7 @@ def eval_seq(cfg, device, img_path_list, model, postprocessors, data_type,
              min_box_area=100., frame_rate=30, use_cuda=True, logger=None):
     if logger is not None and save_dir and not osp.exists(save_dir):
         os.makedirs(save_dir)
-    tracker = SimpleTracker(frame_rate=frame_rate)
+    tracker = SimpleKalmanTracker(frame_rate=frame_rate)
     timer = Timer()
     results = []
     frame_id = 0
@@ -189,7 +189,7 @@ def eval_seq(cfg, device, img_path_list, model, postprocessors, data_type,
         timer.tic()
         ori_img, dets, id_feature, motion, track_idx = process_img(path, model, postprocessors,
             device, references=references)
-        online_targets, references = tracker.update(dets, id_feature, motion, track_idx, logger)
+        online_targets, references = tracker.update(dets, id_feature, track_idx, logger)
         scale = torch.as_tensor([ori_img.shape[1], ori_img.shape[0], ori_img.shape[1], ori_img.shape[0]])
         references[0]['ref_boxes'] /= scale.to(references[0]['ref_boxes'].device)
         references[0]['input_size'] = torch.as_tensor([ori_img.shape[1], ori_img.shape[0]]).reshape(1, 2).long()
@@ -198,7 +198,7 @@ def eval_seq(cfg, device, img_path_list, model, postprocessors, data_type,
         online_ids = []
         #online_scores = []
         for t in online_targets:
-            tlwh = t._tlwh
+            tlwh = t.prev_tlwh
             tid = t.track_id
             vertical = tlwh[2] / tlwh[3] > 1.6
             if tlwh[2] * tlwh[3] > min_box_area and not vertical:
@@ -383,14 +383,15 @@ if __name__ == '__main__':
     #               Venice-1'''
     # data_root = os.path.join(data_dir, 'MOT15/images/test')
     # # test mot17
-    # seqs_str = '''MOT17-01-SDP
-    #               MOT17-03-SDP
-    #               MOT17-06-SDP
-    #               MOT17-07-SDP
-    #               MOT17-08-SDP
-    #               MOT17-12-SDP
-    #               MOT17-14-SDP'''
-    # data_root = os.path.join(data_dir, 'data/MOT17/test')
+    seqs_str = '''MOT17-01-SDP
+                  MOT17-03-SDP
+                  MOT17-06-SDP
+                  MOT17-07-SDP
+                  MOT17-08-SDP
+                  MOT17-12-SDP
+                  MOT17-14-SDP'''
+    # seqs_str = '''MOT17-14-SDP'''
+    data_root = os.path.join(data_dir, 'data/MOT17/test')
     # val mot17
     # seqs_str = '''MOT17-02-SDP
     #               MOT17-04-SDP
@@ -399,8 +400,8 @@ if __name__ == '__main__':
     #               MOT17-10-SDP
     #               MOT17-11-SDP
     #               MOT17-13-SDP'''
-    seqs_str = '''MOT17-13-SDP'''
-    data_root = os.path.join(data_dir, 'data/MOT17/train')
+    # seqs_str = '''MOT17-13-SDP'''
+    # data_root = os.path.join(data_dir, 'data/MOT17/train')
     # # val mot15
     # seqs_str = '''Venice-2
     #               KITTI-13

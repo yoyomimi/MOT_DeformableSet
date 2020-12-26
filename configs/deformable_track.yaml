@@ -1,4 +1,4 @@
-OUTPUT_ROOT: deformable_track_refine_mot17test_nolinkstep2
+OUTPUT_ROOT: deformable_track_train
 DIST_BACKEND: 'nccl'
 WORKERS: 4
 DEVICE: cuda

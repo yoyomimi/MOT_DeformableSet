@@ -532,6 +532,7 @@ class PostProcess(nn.Module):
         img_h, img_w = target_sizes.unbind(1)
         scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
         boxes = boxes * scale_fct[:, None, :]
+        motions = motions * scale_fct[:, None, :2]
         
         
         filenames = [filename] * len(scores)

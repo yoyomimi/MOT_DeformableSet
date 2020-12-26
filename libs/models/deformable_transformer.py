@@ -182,7 +182,7 @@ class DeformableTransformer(nn.Module):
                     out_idx, _) in enumerate(ori_indices)])
                 matched_out_idx = torch.cat([out_idx for (out_idx, _) in ori_indices])
                 ref_boxes = torch.cat([r["ref_boxes"][idx] for r, (_, idx) in zip(references, ori_indices)])
-                reference_points[batch_ref_idx, matched_out_idx] = ref_boxes
+                # reference_points[batch_ref_idx, matched_out_idx] = ref_boxes
             else:
                 ref_indices = None
                 self.out_indices = None

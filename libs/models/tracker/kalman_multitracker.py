@@ -10,15 +10,18 @@ import cv2
 import torch.nn.functional as F
 
 from libs.models.tracker.basetrack import BaseTrack, TrackState
+from libs.models.tracker.kalman_filter import KalmanFilter
 from libs.models.tracker import matching
 
-
 class STrack(BaseTrack):
-    def __init__(self, tlwh, motion, score, temp_feat, logger=None, buffer_size=30):
+    shared_kalman = KalmanFilter()
+    def __init__(self, tlwh, score, temp_feat, logger=None, buffer_size=30):
 
         # wait activate
-        self._tlwh = np.asarray(tlwh, dtype=np.float) # cur loc
-        self.motion = np.asarray(motion, dtype=np.float)
+        self._tlwh = np.asarray(tlwh, dtype=np.float)
+        self.prev_tlwh = np.asarray(tlwh, dtype=np.float)
+        self.kalman_filter = None
+        self.mean, self.covariance = None, None
         self.is_activated = False
 
         self.score = score
@@ -31,6 +34,7 @@ class STrack(BaseTrack):
 
         self.logger = logger
 
+
     def update_features(self, feat):
         # feat /= np.linalg.norm(feat)
         self.curr_feat = feat
@@ -41,9 +45,31 @@ class STrack(BaseTrack):
         self.features.append(feat)
         # self.smooth_feat /= np.linalg.norm(self.smooth_feat)
 
-    def activate(self, frame_id):
+    def predict(self):
+        mean_state = self.mean.copy()
+        if self.state != TrackState.Tracked:
+            mean_state[7] = 0
+        self.mean, self.covariance = self.kalman_filter.predict(mean_state, self.covariance)
+
+    @staticmethod
+    def multi_predict(stracks):
+        if len(stracks) > 0:
+            multi_mean = np.asarray([st.mean.copy() for st in stracks])
+            multi_covariance = np.asarray([st.covariance for st in stracks])
+            for i, st in enumerate(stracks):
+                st.prev_tlwh = st.tlwh
+                if st.state != TrackState.Tracked:
+                    multi_mean[i][7] = 0
+            multi_mean, multi_covariance = STrack.shared_kalman.multi_predict(multi_mean, multi_covariance)
+            for i, (mean, cov) in enumerate(zip(multi_mean, multi_covariance)):
+                stracks[i].mean = mean
+                stracks[i].covariance = cov
+
+    def activate(self, kalman_filter, frame_id):
         """Start a new tracklet"""
+        self.kalman_filter = kalman_filter
         self.track_id = self.next_id()
+        self.mean, self.covariance = self.kalman_filter.initiate(self.tlwh_to_xyah(self._tlwh))
 
         self.tracklet_len = 0
         self.state = TrackState.Tracked
@@ -52,14 +78,12 @@ class STrack(BaseTrack):
         #self.is_activated = True
         self.frame_id = frame_id
         self.start_frame = frame_id
-    
-    @staticmethod
-    def multi_predict(stracks):
-        if len(stracks) > 0:
-            for i in range(len(stracks)):
-                stracks[i]._tlwh = stracks[i].tlwh
 
     def re_activate(self, new_track, frame_id, new_id=False):
+        self.mean, self.covariance = self.kalman_filter.update(
+            self.mean, self.covariance, self.tlwh_to_xyah(new_track.tlwh)
+        )
+
         self.update_features(new_track.curr_feat)
         self.tracklet_len = 0
         self.state = TrackState.Tracked
@@ -79,7 +103,9 @@ class STrack(BaseTrack):
         self.frame_id = frame_id
         self.tracklet_len += 1
 
-        self._tlwh = new_track._tlwh
+        new_tlwh = new_track.tlwh
+        self.mean, self.covariance = self.kalman_filter.update(
+            self.mean, self.covariance, self.tlwh_to_xyah(new_tlwh))
         self.state = TrackState.Tracked
         self.is_activated = True
 
@@ -93,19 +119,20 @@ class STrack(BaseTrack):
         """Get current position in bounding box format `(top left x, top left y,
                 width, height)`.
         """
-        ret = self._tlwh.copy()
-        if self.motion is None:
-            return ret
-        ret[:2] += self.motion
+        if self.mean is None:
+            return self._tlwh.copy()
+        ret = self.mean[:4].copy()
+        ret[2] *= ret[3]
+        ret[:2] -= ret[2:] / 2
         return ret
-    
+
     @property
     # @jit(nopython=True)
     def tlbr(self):
         """Convert bounding box to format `(min x, min y, max x, max y)`, i.e.,
         `(top left, bottom right)`.
         """
-        ret = self._tlwh.copy()
+        ret = self.tlwh.copy()
         ret[2:] += ret[:2]
         return ret
 
@@ -141,7 +168,7 @@ class STrack(BaseTrack):
         return 'OT_{}_({}-{})'.format(self.track_id, self.start_frame, self.end_frame)
 
 
-class SimpleTracker(object):
+class SimpleKalmanTracker(object):
     def __init__(self, track_buffer=30, frame_rate=30, ltrb=True):
         self.tracked_stracks = []  # type: list[STrack]
         self.lost_stracks = []  # type: list[STrack]
@@ -154,7 +181,9 @@ class SimpleTracker(object):
         self.buffer_size = int(frame_rate / 30.0 * track_buffer)
         self.max_time_lost = self.buffer_size
 
-    def update(self, dets, id_feature, motion, track_idx, logger=None):
+        self.kalman_filter = KalmanFilter()
+
+    def update(self, dets, id_feature, track_idx, logger=None):
         self.frame_id += 1
         activated_starcks = []
         refind_stracks = []
@@ -162,12 +191,11 @@ class SimpleTracker(object):
         removed_stracks = []
         if len(dets) > 0:
             '''Detections'''
-            detections = [STrack(STrack.tlbr_to_tlwh(tlbrs[:4]), m, tlbrs[4], f, 30) for
-                          (tlbrs, m, f) in zip(dets[:, :5], motion, id_feature)]
+            detections = [STrack(STrack.tlbr_to_tlwh(tlbrs[:4]), tlbrs[4], f, 30) for
+                          (tlbrs, f) in zip(dets[:, :5], id_feature)]
         else:
             detections = []
 
-        STrack.multi_predict(self.strack_pool) # pred cur location
         ''' Step 1: Referred association, tracked_indices'''
         # TODO
         u_detection = []
@@ -193,10 +221,10 @@ class SimpleTracker(object):
         if len(track_idx) > 0:
             detections = [detections[i] for i in u_detection]
             u_track = np.where(track_valid == 1)[0]
-            r_tracked_stracks = [self.strack_pool[i] for i in u_track if self.strack_pool[i].state == TrackState.Tracked]
+            # import pdb; pdb.set_trace()
+            r_tracked_stracks = [self.strack_pool[i] for i in u_track]
         else:
             r_tracked_stracks = []
-
 
         ''' Step 3: Second association, with IOU'''
         dists = matching.iou_distance(r_tracked_stracks, detections)
@@ -233,7 +261,7 @@ class SimpleTracker(object):
         """ Step 4: Init new stracks"""
         for inew in u_detection:
             track = detections[inew]
-            track.activate(self.frame_id)
+            track.activate(self.kalman_filter, self.frame_id)
             activated_starcks.append(track)
         """ Step 5: Update state"""
         for track in self.lost_stracks:
@@ -263,6 +291,7 @@ class SimpleTracker(object):
             else:
                 tracked_stracks.append(track)
         self.strack_pool = joint_stracks(tracked_stracks, self.lost_stracks)
+        STrack.multi_predict(self.strack_pool) # pred cur location
         # TODO return additional references
         references = None
         id_features = torch.cat([torch.as_tensor(track.smooth_feat).reshape(1, -1) for track in self.strack_pool])
