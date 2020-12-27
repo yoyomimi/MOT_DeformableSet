@@ -145,7 +145,8 @@ class ReferTrackMatcher(nn.Module):
         super().__init__()
         self.cost_feat = cost_feat
         self.dist_thr = dist_thr
-        self.cost_limit = cost_limit
+        # self.cost_limit = cost_limit
+        self.cost_limit = 1.0
         assert cost_feat != 0 or cost_loc != 0, "all costs cant be 0"
     
     def cosine_distance(self, x1, x2, eps=1e-8):

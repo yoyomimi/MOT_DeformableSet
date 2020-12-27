@@ -183,8 +183,8 @@ def eval_seq(cfg, device, img_path_list, model, postprocessors, data_type,
     for i, path in enumerate(img_path_list):
         #if i % 8 != 0:
             #continue
-        if logger is not None and frame_id % 20 == 0:
-            logger.info('Processing frame {} ({:.2f} fps)'.format(frame_id, 1. / max(1e-5, timer.average_time)))
+        # if logger is not None and frame_id % 20 == 0:
+        #     logger.info('Processing frame {} ({:.2f} fps)'.format(frame_id, 1. / max(1e-5, timer.average_time)))
         # run tracking
         timer.tic()
         ori_img, dets, id_feature, motion, track_idx = process_img(path, model, postprocessors,

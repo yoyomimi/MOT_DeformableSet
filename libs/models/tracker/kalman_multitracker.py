@@ -245,7 +245,6 @@ class SimpleKalmanTracker(object):
             if not track.state == TrackState.Lost:
                 track.mark_lost()
                 lost_stracks.append(track)
-
         '''Deal with unconfirmed tracks, usually tracks with only one beginning frame'''
         detections = [detections[i] for i in u_detection]
         dists = matching.iou_distance(self.unconfirmed, detections)
