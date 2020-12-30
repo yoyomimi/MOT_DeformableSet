@@ -64,7 +64,8 @@ class TrackTrainer(BaseTrainer):
         imgs = data[0]
         next_imgs = data[1]
         targets = data[2]
-        outputs = self.model(imgs)
+        warp_matrix = torch.stack([t["warp_matrix"] for t in targets])
+        outputs = self.model(imgs, ori_warp_matrix=warp_matrix)
         loss_dict_prev = self.criterion(outputs, targets)
         ### Modified ###
         indices = self.criterion.out_indices
@@ -112,7 +113,7 @@ class TrackTrainer(BaseTrainer):
             sys.exit(0)
         for data in metric_logger.log_every(train_loader, print_freq, header, self.logger):
             data = self._read_inputs(data)
-            loss_dict = self._forward(data)   
+            loss_dict = self._forward(data)
             weight_dict = self.criterion.weight_dict
             losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
 

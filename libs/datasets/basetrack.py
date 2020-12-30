@@ -1,3 +1,4 @@
+import cv2
 import json
 import logging
 import numpy as np
@@ -64,7 +65,7 @@ class BaseTrackDataset(Dataset):
                     video_anno[video_name]['anno'][int(frame_id)]['labels'].append(int(label))
                     video_anno[video_name]['anno'][int(frame_id)]['track_ids'].append(int(track_id))
                     video_anno[video_name]['anno'][int(frame_id)]['vis_ratios'].append(float(vis_ratio))
-            
+                    
         self.anno_info = []
         count_id = 0
         last_id_count = 0
@@ -98,10 +99,134 @@ class BaseTrackDataset(Dataset):
                 self.anno_info.append(cur_anno_info)
                 count_id += 1
             last_id_count += max_track_id
+
+        # MOT2d
+        anno_file = mmcv.load('/mnt/lustre/chenmingfei/code/MOT_DeformableSet/data/mot_pkl/train/2dmot2015_train.pkl')
+        img_prefix = '/mnt/lustre/share/lindelv/data/mot/'
+        count = len(self.anno_info)
+        max_track_id = 0
+        for i, anno in enumerate(anno_file):
+            img_infos = anno['filename'].split('/')
+            video_name = img_infos[-2]
+            if video_name in ['ADL-Rundle-6', 'ADL-Rundle-8', 'Venice-2', 'ETH-Pedcross2']:
+                continue
+            if i == len(anno_file)-1:
+                continue
+            next_video_name = anno_file[i+1]['filename'].split('/')[-2]
+            if next_video_name != video_name:
+                continue
+            track_ids = np.array(anno['ann']['extra_anns']).reshape(-1, )
+            img_path = img_prefix + anno['filename']
+            frame_id = int(img_infos[-1].split('.')[0])
+            next_ann_id = count + 1
+            labels = np.array(anno['ann']['labels']).reshape(-1, )
+            boxes = np.array(anno['ann']['bboxes']).reshape(-1, 4)
+            # TODO get no more than max_obj humans
+            cur_anno_info = {
+                'video_name': video_name,
+                'img_path': img_path,
+                'width': anno['width'],
+                'height': anno['height'],
+                'frame_id': frame_id,
+                'boxes': boxes,
+                'labels': labels,
+                'track_ids': track_ids,
+                'dataset_track_ids': track_ids + last_id_count,
+                'vis_ratios': np.array([1.0]*len(labels)).reshape(-1, ),
+                'next_ann_id': next_ann_id
+            }
+            if len(track_ids) > 0:
+                max_track_id = max(max(track_ids), max_track_id)
+            self.anno_info.append(cur_anno_info)
+            count += 1
+        last_id_count += max_track_id
         print(f'last_id_count: {last_id_count}')
                 
     def __len__(self):
         return len(self.anno_info)
+    
+    def get_warp_matrix(self, src, dst, warp_mode = cv2.MOTION_HOMOGRAPHY, eps = 1e-5,
+            max_iter = 100, scale = None, align = False):
+        """Compute the warp matrix from src to dst.
+    ​
+        Parameters
+        ----------
+        src : ndarray
+            An NxM matrix of source img(BGR or Gray), it must be the same format as dst.
+        dst : ndarray
+            An NxM matrix of target img(BGR or Gray).
+        warp_mode: flags of opencv
+            translation: cv2.MOTION_TRANSLATION
+            rotated and shifted: cv2.MOTION_EUCLIDEAN
+            affine(shift,rotated,shear): cv2.MOTION_AFFINE
+            homography(3d): cv2.MOTION_HOMOGRAPHY
+        eps: float
+            the threshold of the increment in the correlation coefficient between two iterations
+        max_iter: int
+            the number of iterations.
+        scale: float or [int, int]
+            scale_ratio: float
+            scale_size: [W, H]
+        align: bool
+            whether to warp affine or perspective transforms to the source image
+    ​
+        Returns
+        -------
+        warp matrix : ndarray
+            Returns the warp matrix from src to dst.
+            if motion model is homography, the warp matrix will be 3x3, otherwise 2x3
+        src_aligned: ndarray
+            aligned source image of gray
+        """
+        assert src.shape == dst.shape, "the source image must be the same format to the target image!"
+        # BGR2GRAY
+        if src.ndim == 3:
+            # Convert images to grayscale
+            src = cv2.cvtColor(src, cv2.COLOR_BGR2GRAY)
+            dst = cv2.cvtColor(dst, cv2.COLOR_BGR2GRAY)
+        # make the imgs smaller to speed up
+        if scale is not None:
+            if isinstance(scale, float) or isinstance(scale, int):
+                if scale != 1:
+                    src_r = cv2.resize(src, (0, 0), fx = scale, fy = scale,interpolation =  cv2.INTER_LINEAR)
+                    dst_r = cv2.resize(dst, (0, 0), fx = scale, fy = scale,interpolation =  cv2.INTER_LINEAR)
+                    scale = [scale, scale]
+                else:
+                    src_r, dst_r = src, dst
+                    scale = None
+            else:
+                if scale[0] != src.shape[1] and scale[1] != src.shape[0]:
+                    src_r = cv2.resize(src, (scale[0], scale[1]), interpolation = cv2.INTER_LINEAR)
+                    dst_r = cv2.resize(dst, (scale[0], scale[1]), interpolation=cv2.INTER_LINEAR)
+                    scale = [scale[0] / src.shape[1], scale[1] / src.shape[0]]
+                else:
+                    src_r, dst_r = src, dst
+                    scale = None
+        else:
+            src_r, dst_r = src, dst
+        # Define 2x3 or 3x3 matrices and initialize the matrix to identity
+        if warp_mode == cv2.MOTION_HOMOGRAPHY:
+            warp_matrix = np.eye(3, 3, dtype=np.float32)
+        else :
+            warp_matrix = np.eye(2, 3, dtype=np.float32)
+        # Define termination criteria
+        criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, max_iter, eps)
+        # Run the ECC algorithm. The results are stored in warp_matrix.
+        (cc, warp_matrix) = cv2.findTransformECC (src_r, dst_r, warp_matrix, warp_mode, criteria, None, 1)
+        if scale is not None:
+            warp_matrix[0, 2] = warp_matrix[0, 2] / scale[0]
+            warp_matrix[1, 2] = warp_matrix[1, 2] / scale[1]
+        if align:
+            sz = src.shape
+            if warp_mode == cv2.MOTION_HOMOGRAPHY:
+                # Use warpPerspective for Homography
+                src_aligned = cv2.warpPerspective(src, warp_matrix, (sz[1],sz[0]), flags=cv2.INTER_LINEAR)
+            else :
+                # Use warpAffine for Translation, Euclidean and Affine
+                src_aligned = cv2.warpAffine(src, warp_matrix, (sz[1],sz[0]), flags=cv2.INTER_LINEAR)
+            return warp_matrix, src_aligned
+        else:
+            return warp_matrix, None
 
     def __getitem__(self, index):
         """
@@ -151,6 +276,12 @@ class BaseTrackDataset(Dataset):
             raise FileNotFoundError
         next_img = Image.open(next_img_path).convert('RGB')
         assert next_img.size == img.size
+
+        # get warp matrix
+        im1 = cv2.cvtColor(np.array(img),cv2.COLOR_RGB2BGR)
+        im2 = cv2.cvtColor(np.array(next_img),cv2.COLOR_RGB2BGR)
+        warp_matrix, _ = self.get_warp_matrix(im1, im2)
+
         ori_next_boxes = next_anno['boxes']
         ori_next_labels = next_anno['labels']
         next_dataset_track_ids = next_anno['dataset_track_ids']
@@ -214,5 +345,6 @@ class BaseTrackDataset(Dataset):
             idx_map=match_mask,
             matched_idx=valid_pre_mask,
             ref_boxes=ref_boxes,
+            warp_matrix=torch.as_tensor(warp_matrix).reshape(3, 3)
         )
         return img, next_img, out_target, video_name

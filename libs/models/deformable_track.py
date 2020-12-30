@@ -63,7 +63,7 @@ def sigmoid_focal_loss(inputs, targets, num_boxes=None, reduction='mean', alpha:
 
 class DeformableTrack(nn.Module):
     def __init__(self, backbone, transformer, num_classes, num_queries, num_feature_levels, refer_matcher=None,
-                 emb_dim=128, dataset_nids=759, aux_loss=True, with_box_refine=False, two_stage=False):
+                 emb_dim=128, dataset_nids=1208, aux_loss=True, with_box_refine=False, two_stage=False):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -82,7 +82,7 @@ class DeformableTrack(nn.Module):
         self.det_class_embed = nn.Linear(hidden_dim, num_classes)
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
         ###### modified ##########
-        self.id_embed =  MLP(hidden_dim, hidden_dim, emb_dim, 3)
+        self.light_id_embed =  MLP(hidden_dim, hidden_dim, emb_dim, 3)
         self.nID = dataset_nids
         self.emb_dim = emb_dim
         self.light_id_head = nn.Linear(self.emb_dim, self.nID)
@@ -141,7 +141,7 @@ class DeformableTrack(nn.Module):
             self.det_class_embed = _get_clones(self.det_class_embed, num_pred)
             self.bbox_embed = _get_clones(self.bbox_embed, num_pred)
             ###### modified ##########
-            self.id_embed =  _get_clones(self.id_embed, num_pred)
+            self.light_id_embed =  _get_clones(self.light_id_embed, num_pred)
             self.offset_embed = _get_clones(self.offset_embed, transformer.decoder.num_layers)
             nn.init.constant_(self.offset_embed[0].layers[-1].bias.data[2:], -2.0)
             ##########################
@@ -154,7 +154,7 @@ class DeformableTrack(nn.Module):
             self.det_class_embed = nn.ModuleList([self.det_class_embed for _ in range(num_pred)])
             self.bbox_embed = nn.ModuleList([self.bbox_embed for _ in range(num_pred)])
             ###### modified ##########
-            self.id_embed =  nn.ModuleList([self.id_embed for _ in range(num_pred)])
+            self.light_id_embed =  nn.ModuleList([self.light_id_embed for _ in range(num_pred)])
             self.offset_embed = nn.ModuleList([self.offset_embed for _ in range(transformer.decoder.num_layers)])
             ##########################
             self.transformer.decoder.bbox_embed = None
@@ -162,14 +162,14 @@ class DeformableTrack(nn.Module):
             # hack implementation for two-stage
             self.transformer.decoder.det_class_embed = self.det_class_embed
             ###### modified ##########
-            self.transformer.decoder.id_embed =  self.id_embed
+            self.transformer.decoder.id_embed =  self.light_id_embed
             for offset_embed in self.offset_embed:
                 nn.init.constant_(offset_embed.layers[-1].bias.data[2:], 0.0)
             ##########################
             for box_embed in self.bbox_embed:
                 nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
 
-    def forward(self, samples: NestedTensor, references=None):
+    def forward(self, samples: NestedTensor, references=None, ori_warp_matrix=None):
         """ The forward expects a NestedTensor, which consists of:
                - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
                - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
@@ -219,12 +219,12 @@ class DeformableTrack(nn.Module):
         enc_outputs_id_embeds = self.emb_scale * F.normalize(enc_outputs_id_embeds)
         enc_outputs_id_embeds = self.light_id_head(enc_outputs_id_embeds.contiguous())
 
-
         outputs_classes = []
         outputs_coords = []
         outputs_id_embeds = []
         outputs_id_features = []
         outputs_next_centers = []
+        
         for lvl in range(hs.shape[0]):
             if lvl == 0:
                 reference = init_reference
@@ -233,7 +233,7 @@ class DeformableTrack(nn.Module):
             reference = inverse_sigmoid(reference)
             outputs_class = self.det_class_embed[lvl](hs[lvl])
             ###### modified ##########
-            outputs_id_embed = self.id_embed[lvl](hs[lvl])
+            outputs_id_embed = self.light_id_embed[lvl](hs[lvl])
             outputs_id_features.append(outputs_id_embed.clone())
             outputs_id_embed = self.emb_scale * F.normalize(outputs_id_embed)
             outputs_id_embed = self.light_id_head(outputs_id_embed.contiguous())
@@ -247,8 +247,16 @@ class DeformableTrack(nn.Module):
                 tmp[..., :2] += reference
             next_center_tmp += tmp[..., :2]
             outputs_coord = tmp.sigmoid()
+            if ori_warp_matrix is not None:
+                next_center_tmp_flatten = next_center_tmp.flatten(0, 1)
+                x0, y0 = next_center_tmp_flatten[..., 0], next_center_tmp_flatten[..., 1]
+                warp_matrix = ori_warp_matrix.unsqueeze(1).repeat(1, next_center_tmp.shape[1],
+                    1, 1).flatten(0, 1).reshape(-1, 9)
+                X = warp_matrix[..., 0] * x0 + warp_matrix[..., 1] * y0 + warp_matrix[..., 2]
+                Y = warp_matrix[..., 3] * x0 + warp_matrix[..., 4] * y0 + warp_matrix[..., 5]
+                Z = warp_matrix[..., 6] * x0 + warp_matrix[..., 7] * y0 + warp_matrix[..., 8]
+                next_center_tmp = torch.stack([X/Z, Y/Z], dim=-1).reshape(next_center_tmp.shape)
             outputs_next_center = next_center_tmp.sigmoid()
-
             outputs_classes.append(outputs_class)
             outputs_coords.append(outputs_coord)
             outputs_id_embeds.append(outputs_id_embed)
