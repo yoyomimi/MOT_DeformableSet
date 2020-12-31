@@ -64,8 +64,16 @@ class TrackTrainer(BaseTrainer):
         imgs = data[0]
         next_imgs = data[1]
         targets = data[2]
-        warp_matrix = torch.stack([t["warp_matrix"] for t in targets])
-        outputs = self.model(imgs, ori_warp_matrix=warp_matrix)
+        warp_matrix = []
+        for t in targets:
+            if len(t["warp_matrix"]) == 0:
+                warp_matrix = None
+                target_sizes = None
+                break
+        if warp_matrix is not None:
+            warp_matrix = torch.stack([t["warp_matrix"] for t in targets])
+            target_sizes = targets[0]['size'].expand(len(imgs), 2)
+        outputs = self.model(imgs, ori_warp_matrix=warp_matrix, scale=target_sizes)
         loss_dict_prev = self.criterion(outputs, targets)
         ### Modified ###
         indices = self.criterion.out_indices

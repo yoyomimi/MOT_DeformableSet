@@ -169,7 +169,7 @@ class DeformableTrack(nn.Module):
             for box_embed in self.bbox_embed:
                 nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
 
-    def forward(self, samples: NestedTensor, references=None, ori_warp_matrix=None):
+    def forward(self, samples: NestedTensor, references=None, ori_warp_matrix=None, scale=None):
         """ The forward expects a NestedTensor, which consists of:
                - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
                - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
@@ -247,16 +247,19 @@ class DeformableTrack(nn.Module):
                 tmp[..., :2] += reference
             next_center_tmp += tmp[..., :2]
             outputs_coord = tmp.sigmoid()
-            if ori_warp_matrix is not None:
-                next_center_tmp_flatten = next_center_tmp.flatten(0, 1)
+            next_center_tmp = next_center_tmp.sigmoid()
+            if ori_warp_matrix is not None and scale is not None:
+                img_h, img_w = scale.unbind(1)
+                scale_fct = torch.stack([img_w, img_h], dim=1)
+                next_center_tmp_flatten = (next_center_tmp * scale_fct[:, None, :]).flatten(0, 1)
                 x0, y0 = next_center_tmp_flatten[..., 0], next_center_tmp_flatten[..., 1]
                 warp_matrix = ori_warp_matrix.unsqueeze(1).repeat(1, next_center_tmp.shape[1],
                     1, 1).flatten(0, 1).reshape(-1, 9)
                 X = warp_matrix[..., 0] * x0 + warp_matrix[..., 1] * y0 + warp_matrix[..., 2]
                 Y = warp_matrix[..., 3] * x0 + warp_matrix[..., 4] * y0 + warp_matrix[..., 5]
                 Z = warp_matrix[..., 6] * x0 + warp_matrix[..., 7] * y0 + warp_matrix[..., 8]
-                next_center_tmp = torch.stack([X/Z, Y/Z], dim=-1).reshape(next_center_tmp.shape)
-            outputs_next_center = next_center_tmp.sigmoid()
+                next_center_tmp = (torch.stack([X/Z, Y/Z], dim=-1) / scale_fct[:, None, :]).reshape(next_center_tmp.shape)
+            outputs_next_center = next_center_tmp
             outputs_classes.append(outputs_class)
             outputs_coords.append(outputs_coord)
             outputs_id_embeds.append(outputs_id_embed)
@@ -535,7 +538,6 @@ class PostProcess(nn.Module):
         labels = topk_indexes % out_logits.shape[2]
         boxes = box_ops.box_cxcywh_to_xyxy(out_bbox)
         boxes = torch.gather(boxes, 1, topk_boxes.unsqueeze(-1).repeat(1,1,4))
-
         # and from relative [0, 1] to absolute [0, height] coordinates
         img_h, img_w = target_sizes.unbind(1)
         scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)

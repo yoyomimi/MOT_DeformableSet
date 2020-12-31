@@ -247,7 +247,6 @@ class DeformableTransformerEncoderLayer(nn.Module):
 
         return src
 
-
 class DeformableTransformerEncoder(nn.Module):
     def __init__(self, encoder_layer, num_layers):
         super().__init__()

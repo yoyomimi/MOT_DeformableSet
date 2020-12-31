@@ -114,11 +114,13 @@ class BaseTrackDataset(Dataset):
                 continue
             next_video_name = anno_file[i+1]['filename'].split('/')[-2]
             if next_video_name != video_name:
-                continue
+                next_ann_id = -1
+            else:
+                next_ann_id = count + 1
             track_ids = np.array(anno['ann']['extra_anns']).reshape(-1, )
             img_path = img_prefix + anno['filename']
             frame_id = int(img_infos[-1].split('.')[0])
-            next_ann_id = count + 1
+            
             labels = np.array(anno['ann']['labels']).reshape(-1, )
             boxes = np.array(anno['ann']['bboxes']).reshape(-1, 4)
             # TODO get no more than max_obj humans
@@ -275,12 +277,18 @@ class BaseTrackDataset(Dataset):
             logging.error("Cannot found image data: " + next_img_path)
             raise FileNotFoundError
         next_img = Image.open(next_img_path).convert('RGB')
+        if next_img.size != img.size:
+            import pdb; pdb.set_trace()
         assert next_img.size == img.size
 
         # get warp matrix
         im1 = cv2.cvtColor(np.array(img),cv2.COLOR_RGB2BGR)
         im2 = cv2.cvtColor(np.array(next_img),cv2.COLOR_RGB2BGR)
-        warp_matrix, _ = self.get_warp_matrix(im1, im2)
+        try:
+            warp_matrix, _ = self.get_warp_matrix(im1, im2)
+            warp_matrix = torch.as_tensor(warp_matrix).reshape(3, 3)
+        except:
+            warp_matrix = torch.as_tensor([])
 
         ori_next_boxes = next_anno['boxes']
         ori_next_labels = next_anno['labels']
@@ -335,6 +343,7 @@ class BaseTrackDataset(Dataset):
             valid_pre_mask, 2:]], dim=1)
         assert ref_boxes.shape[-1] == 4
         out_target = dict(
+            size=torch.from_numpy(np.array([h, w])),
             boxes=boxes,
             next_boxes=ori_next_boxes,
             ids=dataset_track_ids,
@@ -345,6 +354,6 @@ class BaseTrackDataset(Dataset):
             idx_map=match_mask,
             matched_idx=valid_pre_mask,
             ref_boxes=ref_boxes,
-            warp_matrix=torch.as_tensor(warp_matrix).reshape(3, 3)
+            warp_matrix=warp_matrix
         )
         return img, next_img, out_target, video_name

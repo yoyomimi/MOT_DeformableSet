@@ -54,10 +54,18 @@ class STrack(BaseTrack):
         self.start_frame = frame_id
     
     @staticmethod
-    def multi_predict(stracks):
+    def multi_predict(stracks, warp_matrix=None):
         if len(stracks) > 0:
             for i in range(len(stracks)):
                 stracks[i]._tlwh = stracks[i].tlwh
+                if warp_matrix is not None:
+                    warp_matrix = warp_matrix.reshape(-1, 9)
+                    x0, y0 = stracks[i]._tlwh[0], stracks[i]._tlwh[1]
+                    X = warp_matrix[..., 0] * x0 + warp_matrix[..., 1] * y0 + warp_matrix[..., 2]
+                    Y = warp_matrix[..., 3] * x0 + warp_matrix[..., 4] * y0 + warp_matrix[..., 5]
+                    Z = warp_matrix[..., 6] * x0 + warp_matrix[..., 7] * y0 + warp_matrix[..., 8]
+                    stracks[i]._tlwh[..., 0] = X/Z
+                    stracks[i]._tlwh[..., 1] = Y/Z
 
     def re_activate(self, new_track, frame_id, new_id=False):
         self.update_features(new_track.curr_feat)
@@ -154,7 +162,7 @@ class SimpleTracker(object):
         self.buffer_size = int(frame_rate / 30.0 * track_buffer)
         self.max_time_lost = self.buffer_size
 
-    def update(self, dets, id_feature, motion, track_idx, logger=None):
+    def update(self, dets, id_feature, motion, track_idx, logger=None, warp_matrix=None):
         self.frame_id += 1
         activated_starcks = []
         refind_stracks = []
@@ -167,7 +175,7 @@ class SimpleTracker(object):
         else:
             detections = []
 
-        STrack.multi_predict(self.strack_pool) # pred cur location
+        STrack.multi_predict(self.strack_pool, warp_matrix) # pred cur location
         ''' Step 1: Referred association, tracked_indices'''
         # TODO
         u_detection = []

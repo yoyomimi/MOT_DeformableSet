@@ -80,6 +80,89 @@ def get_ip(ip_addr):
             ip_list[i] = ip_list[i][1:].split(',')[0]
     return f'tcp://{ip_list[0]}.{ip_list[1]}.{ip_list[2]}.{ip_list[3]}:23456'
 
+def get_warp_matrix(src, dst, warp_mode = cv2.MOTION_HOMOGRAPHY, eps = 1e-5,
+        max_iter = 100, scale = None, align = False):
+    """Compute the warp matrix from src to dst.
+​
+    Parameters
+    ----------
+    src : ndarray
+        An NxM matrix of source img(BGR or Gray), it must be the same format as dst.
+    dst : ndarray
+        An NxM matrix of target img(BGR or Gray).
+    warp_mode: flags of opencv
+        translation: cv2.MOTION_TRANSLATION
+        rotated and shifted: cv2.MOTION_EUCLIDEAN
+        affine(shift,rotated,shear): cv2.MOTION_AFFINE
+        homography(3d): cv2.MOTION_HOMOGRAPHY
+    eps: float
+        the threshold of the increment in the correlation coefficient between two iterations
+    max_iter: int
+        the number of iterations.
+    scale: float or [int, int]
+        scale_ratio: float
+        scale_size: [W, H]
+    align: bool
+        whether to warp affine or perspective transforms to the source image
+​
+    Returns
+    -------
+    warp matrix : ndarray
+        Returns the warp matrix from src to dst.
+        if motion model is homography, the warp matrix will be 3x3, otherwise 2x3
+    src_aligned: ndarray
+        aligned source image of gray
+    """
+    assert src.shape == dst.shape, "the source image must be the same format to the target image!"
+    # BGR2GRAY
+    if src.ndim == 3:
+        # Convert images to grayscale
+        src = cv2.cvtColor(src, cv2.COLOR_BGR2GRAY)
+        dst = cv2.cvtColor(dst, cv2.COLOR_BGR2GRAY)
+    # make the imgs smaller to speed up
+    if scale is not None:
+        if isinstance(scale, float) or isinstance(scale, int):
+            if scale != 1:
+                src_r = cv2.resize(src, (0, 0), fx = scale, fy = scale,interpolation =  cv2.INTER_LINEAR)
+                dst_r = cv2.resize(dst, (0, 0), fx = scale, fy = scale,interpolation =  cv2.INTER_LINEAR)
+                scale = [scale, scale]
+            else:
+                src_r, dst_r = src, dst
+                scale = None
+        else:
+            if scale[0] != src.shape[1] and scale[1] != src.shape[0]:
+                src_r = cv2.resize(src, (scale[0], scale[1]), interpolation = cv2.INTER_LINEAR)
+                dst_r = cv2.resize(dst, (scale[0], scale[1]), interpolation=cv2.INTER_LINEAR)
+                scale = [scale[0] / src.shape[1], scale[1] / src.shape[0]]
+            else:
+                src_r, dst_r = src, dst
+                scale = None
+    else:
+        src_r, dst_r = src, dst
+    # Define 2x3 or 3x3 matrices and initialize the matrix to identity
+    if warp_mode == cv2.MOTION_HOMOGRAPHY:
+        warp_matrix = np.eye(3, 3, dtype=np.float32)
+    else :
+        warp_matrix = np.eye(2, 3, dtype=np.float32)
+    # Define termination criteria
+    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, max_iter, eps)
+    # Run the ECC algorithm. The results are stored in warp_matrix.
+    (cc, warp_matrix) = cv2.findTransformECC (src_r, dst_r, warp_matrix, warp_mode, criteria, None, 1)
+    if scale is not None:
+        warp_matrix[0, 2] = warp_matrix[0, 2] / scale[0]
+        warp_matrix[1, 2] = warp_matrix[1, 2] / scale[1]
+    if align:
+        sz = src.shape
+        if warp_mode == cv2.MOTION_HOMOGRAPHY:
+            # Use warpPerspective for Homography
+            src_aligned = cv2.warpPerspective(src, warp_matrix, (sz[1],sz[0]), flags=cv2.INTER_LINEAR)
+        else :
+            # Use warpAffine for Translation, Euclidean and Affine
+            src_aligned = cv2.warpAffine(src, warp_matrix, (sz[1],sz[0]), flags=cv2.INTER_LINEAR)
+        return warp_matrix, src_aligned
+    else:
+        return warp_matrix, None
+
 def read_img(img_path):
     image = Image.open(img_path).convert('RGB')
     image, _ = resize(image, None, 800, max_size=1333)
@@ -180,6 +263,7 @@ def eval_seq(cfg, device, img_path_list, model, postprocessors, data_type,
     results = []
     frame_id = 0
     references = None
+    prev_img = None
     for i, path in enumerate(img_path_list):
         #if i % 8 != 0:
             #continue
@@ -189,11 +273,28 @@ def eval_seq(cfg, device, img_path_list, model, postprocessors, data_type,
         timer.tic()
         ori_img, dets, id_feature, motion, track_idx = process_img(path, model, postprocessors,
             device, references=references)
-        online_targets, references = tracker.update(dets, id_feature, motion, track_idx, logger)
+
+        if prev_img is not None:
+            warp_matrix, _ = get_warp_matrix(prev_img, ori_img)
+        else:
+            warp_matrix = None
+            
+        online_targets, references = tracker.update(dets, id_feature, motion, track_idx, logger, warp_matrix=warp_matrix)
+        
+        if prev_img is not None:
+            warp_matrix = torch.as_tensor(warp_matrix).to(references[0]['ref_boxes'].device)
+            x0, y0 = references[0]['ref_boxes'][..., 0], references[0]['ref_boxes'][..., 1]     
+            warp_matrix = warp_matrix.unsqueeze(0).repeat(x0.shape[0], 1, 1).reshape(-1, 9)
+            X = warp_matrix[..., 0] * x0 + warp_matrix[..., 1] * y0 + warp_matrix[..., 2]
+            Y = warp_matrix[..., 3] * x0 + warp_matrix[..., 4] * y0 + warp_matrix[..., 5]
+            Z = warp_matrix[..., 6] * x0 + warp_matrix[..., 7] * y0 + warp_matrix[..., 8]
+            references[0]['ref_boxes'][..., :2] = torch.stack([X/Z, Y/Z], dim=-1).reshape(references[0]['ref_boxes'][..., :2].shape)
+
         scale = torch.as_tensor([ori_img.shape[1], ori_img.shape[0], ori_img.shape[1], ori_img.shape[0]])
         references[0]['ref_boxes'] /= scale.to(references[0]['ref_boxes'].device)
         references[0]['input_size'] = torch.as_tensor([ori_img.shape[1], ori_img.shape[0]]).reshape(1, 2).long()
         references = [{k: v.to(device) for k, v in r.items()} for r in references]
+        prev_img = ori_img.copy()
         online_tlwhs = []
         online_ids = []
         #online_scores = []
