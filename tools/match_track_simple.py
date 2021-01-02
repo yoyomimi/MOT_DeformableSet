@@ -383,15 +383,15 @@ if __name__ == '__main__':
     #               Venice-1'''
     # data_root = os.path.join(data_dir, 'MOT15/images/test')
     # # test mot17
-    # seqs_str = '''MOT17-01-SDP
-    #               MOT17-03-SDP
-    #               MOT17-06-SDP
-    #               MOT17-07-SDP
-    #               MOT17-08-SDP
-    #               MOT17-12-SDP
-    #               MOT17-14-SDP'''
+    seqs_str = '''MOT17-01-SDP
+                  MOT17-03-SDP
+                  MOT17-06-SDP
+                  MOT17-07-SDP
+                  MOT17-08-SDP
+                  MOT17-12-SDP
+                  MOT17-14-SDP'''
     # # seqs_str = '''MOT17-14-SDP'''
-    # data_root = os.path.join(data_dir, 'data/MOT17/test')
+    data_root = os.path.join(data_dir, 'data/MOT17/test')
     # val mot17
     # seqs_str = '''MOT17-02-SDP
     #               MOT17-04-SDP
@@ -400,8 +400,8 @@ if __name__ == '__main__':
     #               MOT17-10-SDP
     #               MOT17-11-SDP
     #               MOT17-13-SDP'''
-    seqs_str = '''MOT17-13-SDP'''
-    data_root = os.path.join(data_dir, 'data/MOT17/train')
+    # seqs_str = '''MOT17-13-SDP'''
+    # data_root = os.path.join(data_dir, 'data/MOT17/train')
     # # val mot15
     # seqs_str = '''Venice-2
     #               KITTI-13

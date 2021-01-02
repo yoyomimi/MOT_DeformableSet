@@ -1,4 +1,4 @@
-OUTPUT_ROOT: deformable_track_warp_testnew
+OUTPUT_ROOT: deformable_track_appearance_test
 DIST_BACKEND: 'nccl'
 WORKERS: 4
 DEVICE: cuda

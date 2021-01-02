@@ -121,8 +121,8 @@ if __name__ == '__main__':
             print(f'==> model pretrained from {resume_path} \n')
 
     results = []
-    img_root = '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/data/MOT17/test/MOT17-01-SDP/img1'
-    out_root = 'test_out/MOT17-01-SDP'
+    img_root = '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/data/MOT17/test/MOT17-08-SDP/img1'
+    out_root = 'test_out/MOT17-08-SDP'
     if not os.path.exists(out_root):
         os.makedirs(out_root)
     path_list = sorted(os.listdir(img_root))
@@ -132,7 +132,7 @@ if __name__ == '__main__':
         if path.split('.')[-1] == 'json':
             continue
         img_path = os.path.join(img_root, path)
-        img, pred_out = process_img(img_path, model, postprocessors, device, threshold=0.38)
+        img, pred_out = process_img(img_path, model, postprocessors, device, threshold=0.35)
         out_path = os.path.join(out_root, path)
         results.append(pred_out)
         cv2.imwrite(out_path, img)
