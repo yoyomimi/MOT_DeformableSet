@@ -217,9 +217,85 @@ class ReferTrackMatcher(nn.Module):
             return ori_indices, ref_indices
 
 
+class MatchTrackMatcher(nn.Module):
+    """This class computes an assignment between the last detected objects and the predictions of the network
+       stage one.
+
+    We do a 1-to-1 matching of the best predictions, while the others are un-matched (new detections).
+    """
+
+    def __init__(self,
+                 cost_feat: float = 0.98,
+                 cost_limit: float = 1.0,
+                 ):
+        """Creates the matcher
+
+        Params:
+            cost_feat: This is the relative weight of the feature similarity in the matching cost
+        """
+        super().__init__()
+        self.cost_feat = cost_feat
+        # self.cost_limit = cost_limit
+        self.cost_limit = 1.0
+        assert cost_feat != 0 or cost_loc != 0, "all costs cant be 0"
+    
+    def cosine_distance(self, x1, x2, eps=1e-8):
+        w1 = x1.norm(p=2, dim=1, keepdim=True)
+        w2 = x2.norm(p=2, dim=1, keepdim=True)
+        return 1 - torch.mm(x1, x2.t()) / (w1 * w2.t()).clamp(min=eps)
+
+    def forward(self, ref_outputs, outputs, references, inf=1e10):
+        """ Performs the matching
+        """
+        with torch.no_grad():
+            bs, num_queries = outputs["id_features"].shape[:2]
+            # We flatten to compute the cost matrices in a batch
+            id_features = ref_outputs["id_features"].flatten(0, 1)
+            pred_boxes = ref_outputs["pred_boxes"].flatten(0, 1) # [batch_size * num_queries, 4]
+
+            src_id_features = outputs["id_features"].flatten(0, 1)
+            src_boxes = outputs["pred_boxes"].flatten(0, 1)
+            
+
+            # Also concat the target labels and boxes
+            ref_features = torch.cat([v["ref_features"] for v in references])
+            ref_boxes = torch.cat([v["ref_boxes"] for v in references])
+            input_size = torch.cat([v["input_size"] for v in references])
+            scale = torch.cat([input_size, input_size], dim=1)
+            ref_boxes = ref_boxes * scale
+            pred_boxes = pred_boxes * scale
+            src_boxes = src_boxes * scale
+            ref_boxes[..., 2] /= ref_boxes[..., 3]
+            pred_boxes[..., 2] /= pred_boxes[..., 3]
+            src_boxes[..., 2] /= src_boxes[..., 3]
+            
+            assert len(ref_features) == len(ref_boxes)
+            # Compute the feature similarity
+            ref_distance = torch.diag(self.cosine_distance(id_features, ref_features))
+            cost_feature = self.cosine_distance(src_features, id_features)
+            # Compute the distance ** 2 between boxes 
+            cost_distance = torch.cdist(src_boxes, pred_boxes, p=2) * ref_distance
+
+            # Final cost matrix
+            C = (self.cost_feat * cost_feature + (1 - self.cost_feat)) * cost_distance 
+            C = C.view(bs, num_queries, -1).cpu()
+
+            sizes = [len(v["ref_boxes"]) for v in references]
+            ref_indices = [lap.lapjv(c[i].data.cpu().numpy(), extend_cost=True,
+                cost_limit=self.cost_limit)[1] for i, c in enumerate(C.split(sizes, -1))]
+            ori_indices = [(torch.as_tensor(torch.range(0, len(idx)-1)[idx>=0], dtype=torch.int64), torch.as_tensor(idx[
+                idx>=0], dtype=torch.int64).long()) for i, idx in enumerate(ref_indices)]
+            ref_indices = [(torch.as_tensor(torch.range(0, len(idx)-1)[idx>=0], dtype=torch.int64), r['idx_map'][torch.as_tensor(idx[
+                idx>=0], dtype=torch.int64)].long()) for i, (r, idx) in enumerate(zip(references, ref_indices))]
+            return ori_indices, ref_indices
+
+
 def build_matcher(cfg):
     return HungarianMatcher(cost_class=cfg.MATCHER.COST_CLASS,
         cost_bbox=cfg.MATCHER.COST_BBOX, cost_giou=cfg.MATCHER.COST_GIOU)
 
 def build_refer_matcher(cfg):
     return ReferTrackMatcher()
+
+def build_matchtrack_matcher(cfg):
+    return MatchTrackMatcher()

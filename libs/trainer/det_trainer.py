@@ -64,21 +64,22 @@ class TrackTrainer(BaseTrainer):
         imgs = data[0]
         next_imgs = data[1]
         targets = data[2]
-        warp_matrix = []
-        for t in targets:
-            if len(t["warp_matrix"]) == 0:
-                warp_matrix = None
-                target_sizes = None
-                break
-        if warp_matrix is not None:
-            warp_matrix = torch.stack([t["warp_matrix"] for t in targets])
-            target_sizes = targets[0]['size'].expand(len(imgs), 2)
-        outputs = self.model(imgs, ori_warp_matrix=warp_matrix, scale=target_sizes)
+        # warp_matrix = []
+        # for t in targets:
+        #     if len(t["warp_matrix"]) == 0:
+        #         warp_matrix = None
+        #         target_sizes = None
+        #         break
+        # if warp_matrix is not None:
+        #     warp_matrix = torch.stack([t["warp_matrix"] for t in targets])
+        #     target_sizes = targets[0]['size'].expand(len(imgs), 2)
+        outputs = self.model(imgs)
         loss_dict_prev = self.criterion(outputs, targets)
         ### Modified ###
         indices = self.criterion.out_indices
         out_id_features = self.model.module.out_id_features.detach()
-        out_pred_next_boxes = self.model.module.out_pred_next_boxes.detach()
+        out_prev_boxes = self.model.module.out_pred_boxes.detach()
+        prev_memory = self.model.module.out_memory.detach()
         assert len(indices) == len(targets)
         references = []
         for i in range(len(indices)):
@@ -88,15 +89,17 @@ class TrackTrainer(BaseTrainer):
                 references = []
                 break
             idx_map = targets[i]['idx_map']
-            ref_boxes = targets[i]['ref_boxes']
+            gt_ref_boxes = targets[i]['ref_boxes']
+            gt_ref_ids = targets[i]['ref_ids']
             id_features = out_id_features[i]
-            pred_next_boxes = out_pred_next_boxes[i]
+            prev_boxes = out_prev_boxes[i]
             valid_idx = [torch.where(tgt==idx)[0][0] for idx in matched_idx]
             prev_features = id_features[src[torch.as_tensor(valid_idx).reshape(-1, ).long()]]
             input_size = torch.as_tensor([imgs[i].shape[2], imgs[i].shape[1]]).reshape(1, 2).long()
-            ref_boxes = pred_next_boxes[src[torch.as_tensor(valid_idx).reshape(-1, ).long()]]
+            ref_boxes = prev_boxes[src[torch.as_tensor(valid_idx).reshape(-1, ).long()]]
             references.append(dict(ref_features=prev_features, ref_boxes=ref_boxes, idx_map=idx_map,
-                                   input_size=input_size))
+                                   input_size=input_size, gt_ref_boxes=gt_ref_boxes, prev_memory=prev_memory,
+                                   gt_ref_ids=gt_ref_ids))
         if len(references) == 0:
             references = None
         outputs = self.model(next_imgs, references)

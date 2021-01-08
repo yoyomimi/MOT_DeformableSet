@@ -21,7 +21,7 @@ from libs.utils.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        is_dist_avail_and_initialized, inverse_sigmoid)
 
 from libs.models.backbone import build_backbone
-from libs.models.matcher import build_matcher, build_refer_matcher
+from libs.models.matcher import build_matcher, build_matchtrack_matcher
 from libs.models.deformable_transformer import build_deforamble_transformer
 import copy
 
@@ -61,9 +61,10 @@ def sigmoid_focal_loss(inputs, targets, num_boxes=None, reduction='mean', alpha:
         return loss.sum()
 
 
-class DeformableTrack(nn.Module):
-    def __init__(self, backbone, transformer, num_classes, num_queries, num_feature_levels, refer_matcher=None,
-                 emb_dim=128, dataset_nids=1208, aux_loss=True, with_box_refine=False, two_stage=False):
+class DeformableMatchTrack(nn.Module):
+    def __init__(self, backbone, transformer, num_classes, num_queries, num_feature_levels,
+                 emb_dim=64, dataset_nids=14687, aux_loss=True, with_box_refine=False, two_stage=False, num_match_decoder_layers=1):
+        # ch: 355567
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -82,7 +83,7 @@ class DeformableTrack(nn.Module):
         self.det_class_embed = nn.Linear(hidden_dim, num_classes)
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
         ###### modified ##########
-        self.light_id_embed =  MLP(hidden_dim, hidden_dim, emb_dim, 3)
+        self.id_embed =  MLP(hidden_dim, hidden_dim, emb_dim, 3)
         self.nID = dataset_nids
         self.emb_dim = emb_dim
         self.light_id_head = nn.Linear(self.emb_dim, self.nID)
@@ -92,9 +93,7 @@ class DeformableTrack(nn.Module):
         nn.init.constant_(self.light_id_head.bias, bias_value)
         # self.IDLoss = nn.CrossEntropyLoss(ignore_index=-1)
         self.emb_scale = math.sqrt(2) * math.log(self.nID - 1)
-        self.offset_embed = MLP(hidden_dim, hidden_dim, 2, 3)
-        self.refer_matcher = refer_matcher
-        self.ref_indices = None
+        # self.offset_embed = MLP(hidden_dim, hidden_dim, 2, 3)
         ##########################
         self.num_feature_levels = num_feature_levels
         if not two_stage:
@@ -140,11 +139,6 @@ class DeformableTrack(nn.Module):
         if with_box_refine:
             self.det_class_embed = _get_clones(self.det_class_embed, num_pred)
             self.bbox_embed = _get_clones(self.bbox_embed, num_pred)
-            ###### modified ##########
-            self.light_id_embed =  _get_clones(self.light_id_embed, num_pred)
-            self.offset_embed = _get_clones(self.offset_embed, transformer.decoder.num_layers)
-            nn.init.constant_(self.offset_embed[0].layers[-1].bias.data[2:], -2.0)
-            ##########################
             nn.init.constant_(self.bbox_embed[0].layers[-1].bias.data[2:], -2.0)
             # hack implementation for iterative bounding box refinement
             self.transformer.decoder.bbox_embed = self.bbox_embed
@@ -153,27 +147,29 @@ class DeformableTrack(nn.Module):
             # nn.init.constant_(self.offset_embed.layers[-1].bias.data[2:], -2.0)
             self.det_class_embed = nn.ModuleList([self.det_class_embed for _ in range(num_pred)])
             self.bbox_embed = nn.ModuleList([self.bbox_embed for _ in range(num_pred)])
-            ###### modified ##########
-            self.light_id_embed =  nn.ModuleList([self.light_id_embed for _ in range(num_pred)])
-            self.offset_embed = nn.ModuleList([self.offset_embed for _ in range(transformer.decoder.num_layers)])
-            ##########################
             self.transformer.decoder.bbox_embed = None
         if two_stage:
             # hack implementation for two-stage
             self.transformer.decoder.det_class_embed = self.det_class_embed
             ###### modified ##########
-            self.transformer.decoder.id_embed =  self.light_id_embed
-            for offset_embed in self.offset_embed:
-                nn.init.constant_(offset_embed.layers[-1].bias.data[2:], 0.0)
+            # self.transformer.decoder.id_embed =  self.id_embed
+            # for offset_embed in self.offset_embed:
+            #     nn.init.constant_(offset_embed.layers[-1].bias.data[2:], 0.0)
             ##########################
             for box_embed in self.bbox_embed:
                 nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
+        # match
+        self.ref_embed = MLP(hidden_dim, hidden_dim, 2, 3)
+        nn.init.constant_(self.ref_embed.layers[-1].bias.data[2:], -2.0)
+        # self.ref_embed = _get_clones(self.ref_embed, num_match_decoder_layers)
+        # nn.init.constant_(self.ref_embed[0].layers[-1].bias.data[2:], -2.0)
+        self.ref_id_embed = MLP(hidden_dim, hidden_dim, emb_dim, 3)
+        
 
-    def forward(self, samples: NestedTensor, references=None, ori_warp_matrix=None, scale=None):
-        """ The forward expects a NestedTensor, which consists of:
+    def forward(self, samples: NestedTensor, references=None):
+        """ The forward expects a NestedTensor, which consists of:
                - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
                - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
-
             It returns a dict with the following elements:
                - "pred_logits": the classification logits (including no-object) for all queries.
                                 Shape= [batch_size x num_queries x (num_classes + 1)]
@@ -212,19 +208,42 @@ class DeformableTrack(nn.Module):
         query_embeds = None
         if not self.two_stage:
             query_embeds = self.query_embed.weight
-        hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact, enc_outputs_id_embeds, ref_indices = self.transformer(
-            srcs, masks, pos, query_embeds, self.refer_matcher, references)
-        self.ref_indices = ref_indices
-        enc_outpus_id_features = enc_outputs_id_embeds.clone()
-        enc_outputs_id_embeds = self.emb_scale * F.normalize(enc_outputs_id_embeds)
-        enc_outputs_id_embeds = self.light_id_head(enc_outputs_id_embeds.contiguous())
+        hs, init_reference, inter_references, enc_outputs_class, enc_outputs_coord_unact, ref_indices, memory, match_hs, match_inter_references = self.transformer(
+            srcs, masks, pos, query_embeds, references=references)
+        self.out_memory = memory
+
+        if references is not None:
+            assert len(match_hs) == len(self.ref_embed)
+            match_reference = references['ref_boxes'][..., :2]
+            ref_id_embed = self.ref_id_embed(match_hs)
+            ref_id_feature = ref_id_embed.clone()
+            ref_id_embed = self.emb_scale * F.normalize(ref_id_embed)
+            ref_id_embed = self.light_id_head(ref_id_embed.contiguous())
+            tmp = self.ref_embed(match_hs)
+            tmp += reference
+            ref_coords = tmp.sigmoid()
+        # ref_coords = []
+        # for lvl in range(match_hs.shape[0]):
+        #     if lvl == 0:
+        #         reference = references['ref_boxes'][..., :2]
+        #     else:
+        #         reference = match_inter_references[lvl - 1]
+        #     reference = inverse_sigmoid(reference)
+        #     if lvl == match_hs.shape[0] - 1:
+        #         ref_id_embed = self.ref_id_embed(match_hs[lvl])
+        #         ref_id_feature = ref_id_embed.clone()
+        #         ref_id_embed = self.emb_scale * F.normalize(ref_id_embed)
+        #         ref_id_embed = self.light_id_head(ref_id_embed.contiguous())
+        #     tmp = self.ref_embed[lvl](match_hs[lvl])
+        #     tmp += reference
+        #         # next_center_tmp += reference
+        #     ref_coords.append(tmp.sigmoid())
 
         outputs_classes = []
         outputs_coords = []
         outputs_id_embeds = []
         outputs_id_features = []
         outputs_next_centers = []
-        
         for lvl in range(hs.shape[0]):
             if lvl == 0:
                 reference = init_reference
@@ -233,68 +252,61 @@ class DeformableTrack(nn.Module):
             reference = inverse_sigmoid(reference)
             outputs_class = self.det_class_embed[lvl](hs[lvl])
             ###### modified ##########
-            outputs_id_embed = self.light_id_embed[lvl](hs[lvl])
-            outputs_id_features.append(outputs_id_embed.clone())
-            outputs_id_embed = self.emb_scale * F.normalize(outputs_id_embed)
-            outputs_id_embed = self.light_id_head(outputs_id_embed.contiguous())
-            next_center_tmp = self.offset_embed[lvl](hs[lvl])
+            if lvl == hs.shape[0] - 1:
+                outputs_id_embed = self.id_embed(hs[lvl])
+                outputs_id_features.append(outputs_id_embed.clone())
+                # outputs_id_embed = self.emb_scale * F.normalize(outputs_id_embed)
+                # outputs_id_embed = self.light_id_head(outputs_id_embed.contiguous())
+                outputs_id_embed = None
+                outputs_id_embeds.append(outputs_id_embed)
+            # next_center_tmp = self.offset_embed[lvl](hs[lvl])
             ##########################
             tmp = self.bbox_embed[lvl](hs[lvl])
             if reference.shape[-1] == 4:
                 tmp += reference
+                # next_center_tmp += reference[..., :2]
             else:
                 assert reference.shape[-1] == 2
                 tmp[..., :2] += reference
-            next_center_tmp += tmp[..., :2]
+                # next_center_tmp += reference
             outputs_coord = tmp.sigmoid()
-            next_center_tmp = next_center_tmp.sigmoid()
-            if ori_warp_matrix is not None and scale is not None:
-                img_h, img_w = scale.unbind(1)
-                scale_fct = torch.stack([img_w, img_h], dim=1)
-                next_center_tmp_flatten = (next_center_tmp * scale_fct[:, None, :]).flatten(0, 1)
-                x0, y0 = next_center_tmp_flatten[..., 0], next_center_tmp_flatten[..., 1]
-                warp_matrix = ori_warp_matrix.unsqueeze(1).repeat(1, next_center_tmp.shape[1],
-                    1, 1).flatten(0, 1).reshape(-1, 9)
-                X = warp_matrix[..., 0] * x0 + warp_matrix[..., 1] * y0 + warp_matrix[..., 2]
-                Y = warp_matrix[..., 3] * x0 + warp_matrix[..., 4] * y0 + warp_matrix[..., 5]
-                Z = warp_matrix[..., 6] * x0 + warp_matrix[..., 7] * y0 + warp_matrix[..., 8]
-                next_center_tmp = (torch.stack([X/Z, Y/Z], dim=-1) / scale_fct[:, None, :]).reshape(next_center_tmp.shape)
-            outputs_next_center = next_center_tmp
+            # outputs_next_center = next_center_tmp.sigmoid()
+
             outputs_classes.append(outputs_class)
             outputs_coords.append(outputs_coord)
-            outputs_id_embeds.append(outputs_id_embed)
-            outputs_next_centers.append(outputs_next_center)
+            # outputs_next_centers.append(outputs_next_center)
         outputs_class = torch.stack(outputs_classes)
         outputs_coord = torch.stack(outputs_coords)
-        outputs_id_embed = torch.stack(outputs_id_embeds)
-        outputs_id_features = torch.stack(outputs_id_features)
-        outputs_next_center = torch.stack(outputs_next_centers)
-        self.out_id_features = outputs_id_features[-1].clone()
-        self.out_pred_next_boxes = outputs_coord[-1].clone()
-        self.out_pred_next_boxes[..., :2] = self.out_pred_next_boxes[..., :2]
-        motion = outputs_next_center[-1] - outputs_coord[-1][..., :2]
+        outputs_id_embed = outputs_id_embeds[-1]
+        outputs_id_features = outputs_id_features[-1]
+        self.out_id_features = outputs_id_features
+        self.out_pred_boxes = outputs_coord[-1]
+        # outputs_next_center = torch.stack(outputs_next_centers)
+
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
-               'id_embeds': outputs_id_embed[-1], 'id_features': outputs_id_features[-1],
-               'next_centers': outputs_next_center[-1], 'motions': motion
+               'id_embeds': outputs_id_embed, 'id_features': outputs_id_features
+            #    'next_cenetrs': outputs_next_center[-1]
                }
         if self.aux_loss:
-            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord,
-                outputs_id_embed, outputs_next_center)
+            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
 
         if self.two_stage:
             enc_outputs_coord = enc_outputs_coord_unact.sigmoid()
-            out['enc_outputs'] = {'pred_logits': enc_outputs_class, 'pred_boxes': enc_outputs_coord,
-                                  'id_embeds': enc_outputs_id_embeds, 'id_features': enc_outpus_id_features}
+            out['enc_outputs'] = {'pred_logits': enc_outputs_class, 'pred_boxes': enc_outputs_coord}
+        
+        if references is not None:
+            out['ref_outputs'] = {'ref_coords': ref_coords,
+               'ref_id_embeds': ref_id_embed, 'ref_id_features': ref_id_feature}
+            # out['aux_ref_outputs'] = [{'ref_coords': a} for a in ref_coords[:-1]]
         return out
 
     @torch.jit.unused
-    def _set_aux_loss(self, outputs_class, outputs_coord, outputs_id_embed, outputs_next_center):
+    def _set_aux_loss(self, outputs_class, outputs_coord):
         # this is a workaround to make torchscript happy, as torchscript
         # doesn't support dictionary with non-homogeneous values, such
         # as a dict having both a Tensor and a list.
-        return [{'pred_logits': a, 'pred_boxes': b, 'id_embeds': c, 'next_centers': d}
-                for a, b, c, d in zip(outputs_class[:-1], outputs_coord[:-1], outputs_id_embed[:-1],
-                    outputs_next_center[:-1])]
+        return [{'pred_logits': a, 'pred_boxes': b,}
+                for a, b in zip(outputs_class[:-1], outputs_coord[:-1])]
 
 
 class SetCriterion(nn.Module):
@@ -303,7 +315,7 @@ class SetCriterion(nn.Module):
         1) we compute hungarian assignment between ground truth boxes and the outputs of the model
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
-    def __init__(self, num_classes, matcher, weight_dict, losses, focal_alpha=0.25):
+    def __init__(self, num_classes, matcher, weight_dict, losses, refer_matcher=None, focal_alpha=0.25):
         """ Create the criterion.
         Parameters:
             num_classes: number of object categories, omitting the special no-object category
@@ -318,6 +330,7 @@ class SetCriterion(nn.Module):
         self.weight_dict = weight_dict
         self.losses = losses
         self.focal_alpha = focal_alpha
+        self.refer_matcher = refer_matcher
         
     def loss_labels(self, outputs, targets, indices, num_boxes, log=True, is_next=False):
         """Classification loss (NLL)
@@ -405,6 +418,28 @@ class SetCriterion(nn.Module):
         losses['loss_giou'] = loss_giou.sum() / num_boxes
         return losses
 
+    def loss_match(self, outputs, targets, indices, num_boxes, log=True, is_next=False):
+        assert is_next is True
+        losses = {}
+        target_next_centers = torch.cat([t['gt_ref_boxes'] for t in targets], dim=0)
+        src_next_centers = torch.cat([o['ref_coords'] for o in outputs], dim=0)
+        loss_offset = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
+        losses['loss_offset'] = loss_offset.sum() / num_boxes
+        # id
+        target_ids = torch.cat([t['ref_ids'] for t in targets], dim=0)
+        valids_ids = torch.where(target_ids>-1)[0]
+        target_ids = target_ids[valids_ids]
+        outputs_src_id_logits = torch.cat([o['ref_id_embeds'] for o in outputs], dim=0)[valids_ids].contiguous()
+        # loss_ids = self.IDLoss(outputs_src_id_logits, target_ids)
+        target_ids_onehot = torch.zeros([outputs_src_id_logits.shape[0], outputs_src_id_logits.shape[1] + 1],
+                                        dtype=outputs_src_id_logits.dtype, layout=outputs_src_id_logits.layout, device=outputs_src_id_logits.device)
+        target_ids_onehot.scatter_(1, target_ids.unsqueeze(-1), 1)
+
+        target_ids_onehot = target_ids_onehot[:,:-1]
+        loss_ids = sigmoid_focal_loss(outputs_src_id_logits, target_ids_onehot, reduction='sum', alpha=self.focal_alpha, gamma=2) / max(1, outputs_src_id_logits.shape[0])
+        losses['match_loss_ids'] = loss_ids
+        return losses
+        
     def _get_src_permutation_idx(self, indices):
         # permute predictions following indices
         batch_idx = torch.cat([torch.full_like(src, i) for i, (src, _) in enumerate(indices)])
@@ -426,7 +461,7 @@ class SetCriterion(nn.Module):
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
         return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
 
-    def forward(self, outputs, targets, ref_indices=None, is_next=False):
+    def forward(self, outputs, targets, is_next=False, references=None):
         """ This performs the loss computation.
         Parameters:
              outputs: dict of tensors, see the output specification of the model for the format
@@ -439,8 +474,10 @@ class SetCriterion(nn.Module):
                              in the previous frame
                 "idx_map": Tensor of dim [num_refer_boxes, num_targets], map the refer index to the target index
         """
-        outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs' and k != 'enc_outputs'}
-  
+        outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs' and k != 'enc_outputs' and k != 'ref_outputs' and k != 'aux_ref_outputs'}
+        ref_outputs = outputs['ref_outputs']
+        ori_indices, ref_indices = refer_matcher(ref_outputs, references)
+
         # Retrieve the matching between the outputs of the last layer and the targets
         indices = self.matcher(outputs_without_aux, targets, ref_indices, is_next)
         self.out_indices = indices
@@ -493,6 +530,15 @@ class SetCriterion(nn.Module):
                 l_dict = self.get_loss(loss, enc_outputs, bin_targets, indices, num_boxes, **kwargs)
                 l_dict = {k + f'_enc': v for k, v in l_dict.items()}
                 losses.update(l_dict)
+        # ref outputs
+        if 'ref_outputs' in outputs:
+            # regression loss for ref outputs
+            ref_num_boxes = sum(len(r["gt_ref_boxes"]) for r in references)
+            ref_num_boxes = torch.as_tensor([ref_num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
+            if is_dist_avail_and_initialized():
+                torch.distributed.all_reduce(ref_num_boxes)
+            ref_num_boxes = torch.clamp(ref_num_boxes / get_world_size(), min=1).item()
+            losses.update(self.loss_match(outputs, references, None, ref_num_boxes, is_next=is_next))
 
         return losses
 
@@ -511,7 +557,6 @@ class PostProcess(nn.Module):
         """
         out_logits, out_bbox = outputs['pred_logits'], outputs['pred_boxes']
         id_features = outputs['id_features']
-        motions = outputs['motions']
 
         assert len(out_logits) == len(target_sizes)
         assert target_sizes.shape[1] == 2
@@ -533,15 +578,11 @@ class PostProcess(nn.Module):
         img_h, img_w = target_sizes.unbind(1)
         scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
         boxes = boxes * scale_fct[:, None, :]
-        motions = motions * scale_fct[:, None, :2]
-        
         
         filenames = [filename] * len(scores)
         results = [{'filename': f, 'scores': s, 'labels': l, 'boxes': b} for f, s, l, b in zip(
             filenames, scores, labels, boxes)]
         results[-1]['id_features'] =  id_features.reshape(-1, id_features.shape[
-            -1])[topk_boxes[0]]
-        results[-1]['motions'] =  motions.reshape(-1, motions.shape[
             -1])[topk_boxes[0]]
         results[-1]['track_idx'] = track_idx[topk_boxes[0]]
 
@@ -570,14 +611,13 @@ def build_model(cfg, device):
 
     transformer = build_deforamble_transformer(cfg)
     matcher = build_matcher(cfg)
-    ref_matcher = build_refer_matcher(cfg)
-    model = DeformableTrack(
+    ref_matcher = build_matchtrack_matcher(cfg)
+    model = DeformableMatchTrack(
         backbone,
         transformer,
         num_classes=num_classes,
         num_queries=cfg.TRANSFORMER.NUM_QUERIES,
         num_feature_levels=cfg.TRANSFORMER.NUM_FEATURE_LEVELS,
-        refer_matcher=ref_matcher,
         aux_loss=cfg.LOSS.AUX_LOSS,
         with_box_refine=cfg.DEFORMABLE.WITH_BOX_REFINE,
         two_stage=cfg.DEFORMABLE.TWO_STAGE,
@@ -585,7 +625,8 @@ def build_model(cfg, device):
     weight_dict = {'loss_ce': cfg.LOSS.CLS_LOSS_COEF, 'loss_bbox': cfg.LOSS.BBOX_LOSS_COEF}
     weight_dict['loss_giou'] = cfg.LOSS.GIOU_LOSS_COEF
     weight_dict['loss_ids'] = cfg.LOSS.ID_LOSS_COEF
-    weight_dict['loss_next_centers'] = cfg.LOSS.OFFSET_LOSS_COEF
+    weight_dict['loss_offset'] = cfg.LOSS.OFFSET_LOSS_COEF
+    weight_dict['match_loss_ids'] = cfg.LOSS.ID_LOSS_COEF
     # TODO this is a hack
     if cfg.LOSS.AUX_LOSS:
         aux_weight_dict = {}
@@ -598,7 +639,7 @@ def build_model(cfg, device):
     losses = ['labels', 'boxes', 'cardinality']
     # num_classes, matcher, weight_dict, losses, focal_alpha=0.25
     criterion = SetCriterion(num_classes, matcher, weight_dict, losses, 
-        focal_alpha=cfg.LOSS.FOCAL_ALPHA)
+        focal_alpha=cfg.LOSS.FOCAL_ALPHA, refer_matcher=ref_matcher)
     criterion.to(device)
     postprocessors = PostProcess()
 
