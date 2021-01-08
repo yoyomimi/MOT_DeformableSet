@@ -12,7 +12,7 @@ DATASET:
   IMG_NUM_PER_GPU: 1
   NUM_CLASSES: 2 # id 加 1
   MAX_SIZE: 1088 #1333
-  SCALES: [608, 640, 672, 704]
+  SCALES: [608,]
   PREFIX: '/mnt/lustre/chenmingfei/data/MOT_data/'
 MODEL:
   FILE: deformable_matchtrack
@@ -52,7 +52,7 @@ LOSS:
   FOCAL_ALPHA: 0.25
 TRAINER:
   FILE: det_trainer
-  NAME: DetTrainer
+  NAME: TrackTrainer
 TRAIN:
   LR: 0.0001
   LR_BACKBONE: 0.00001
@@ -61,8 +61,8 @@ TRAIN:
   LR_PROJ_NAMES: ['reference_points', 'sampling_offsets']
   MOMENTUM: 0.9
   WEIGHT_DECAY: 0.0001
-  LR_DROP: 12 #40
-  MAX_EPOCH: 20 #50
+  LR_DROP: 20 #40
+  MAX_EPOCH: 30 #50
   PRINT_FREQ: 20
   SAVE_INTERVAL: 1 #5
   SAVE_EVERY_CHECKPOINT: True

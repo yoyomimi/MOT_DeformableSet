@@ -90,7 +90,7 @@ class TrackTrainer(BaseTrainer):
                 break
             idx_map = targets[i]['idx_map']
             gt_ref_boxes = targets[i]['ref_boxes']
-            gt_ref_ids = targets[i]['ref_ids']
+            gt_ref_ids = targets[i]['gt_ref_ids']
             id_features = out_id_features[i]
             prev_boxes = out_prev_boxes[i]
             valid_idx = [torch.where(tgt==idx)[0][0] for idx in matched_idx]
@@ -103,8 +103,9 @@ class TrackTrainer(BaseTrainer):
         if len(references) == 0:
             references = None
         outputs = self.model(next_imgs, references)
-        loss_dict_next = self.criterion(outputs,targets, self.model.module.ref_indices, is_next=True)
+        loss_dict_next = self.criterion(outputs, targets, is_next=True, references=references)
         loss_dict = {k: 0.5*(v + loss_dict_next[k]) for k, v in loss_dict_prev.items()}
+        loss_dict.update({k: v for k, v in loss_dict_next.items() if k not in loss_dict_prev.keys()})
         ##########
         return loss_dict
 

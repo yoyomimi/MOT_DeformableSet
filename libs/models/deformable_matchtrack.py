@@ -63,7 +63,7 @@ def sigmoid_focal_loss(inputs, targets, num_boxes=None, reduction='mean', alpha:
 
 class DeformableMatchTrack(nn.Module):
     def __init__(self, backbone, transformer, num_classes, num_queries, num_feature_levels,
-                 emb_dim=64, dataset_nids=14687, aux_loss=True, with_box_refine=False, two_stage=False, num_match_decoder_layers=1):
+                 emb_dim=128, dataset_nids=14687, aux_loss=True, with_box_refine=False, two_stage=False, num_match_decoder_layers=3):
         # ch: 355567
         """ Initializes the model.
         Parameters:
@@ -160,10 +160,12 @@ class DeformableMatchTrack(nn.Module):
                 nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
         # match
         self.ref_embed = MLP(hidden_dim, hidden_dim, 2, 3)
-        nn.init.constant_(self.ref_embed.layers[-1].bias.data[2:], -2.0)
-        # self.ref_embed = _get_clones(self.ref_embed, num_match_decoder_layers)
-        # nn.init.constant_(self.ref_embed[0].layers[-1].bias.data[2:], -2.0)
-        self.ref_id_embed = MLP(hidden_dim, hidden_dim, emb_dim, 3)
+        nn.init.constant_(self.ref_embed.layers[-1].weight.data, 0)
+        nn.init.constant_(self.ref_embed.layers[-1].bias.data, 0)
+        # nn.init.constant_(self.ref_embed.layers[-1].bias.data[2:], -2.0)
+        self.ref_embed = _get_clones(self.ref_embed, num_match_decoder_layers)
+        nn.init.constant_(self.ref_embed[0].layers[-1].bias.data[2:], -2.0)
+        self.ref_id_embed = copy.deepcopy(self.id_embed)
         
 
     def forward(self, samples: NestedTensor, references=None):
@@ -212,32 +214,33 @@ class DeformableMatchTrack(nn.Module):
             srcs, masks, pos, query_embeds, references=references)
         self.out_memory = memory
 
-        if references is not None:
-            assert len(match_hs) == len(self.ref_embed)
-            match_reference = references['ref_boxes'][..., :2]
-            ref_id_embed = self.ref_id_embed(match_hs)
-            ref_id_feature = ref_id_embed.clone()
-            ref_id_embed = self.emb_scale * F.normalize(ref_id_embed)
-            ref_id_embed = self.light_id_head(ref_id_embed.contiguous())
-            tmp = self.ref_embed(match_hs)
-            tmp += reference
-            ref_coords = tmp.sigmoid()
-        # ref_coords = []
-        # for lvl in range(match_hs.shape[0]):
-        #     if lvl == 0:
-        #         reference = references['ref_boxes'][..., :2]
-        #     else:
-        #         reference = match_inter_references[lvl - 1]
-        #     reference = inverse_sigmoid(reference)
-        #     if lvl == match_hs.shape[0] - 1:
-        #         ref_id_embed = self.ref_id_embed(match_hs[lvl])
-        #         ref_id_feature = ref_id_embed.clone()
-        #         ref_id_embed = self.emb_scale * F.normalize(ref_id_embed)
-        #         ref_id_embed = self.light_id_head(ref_id_embed.contiguous())
-        #     tmp = self.ref_embed[lvl](match_hs[lvl])
-        #     tmp += reference
-        #         # next_center_tmp += reference
-        #     ref_coords.append(tmp.sigmoid())
+        if references is not None and match_hs is not None:
+            # print(match_hs.shape)
+            # ref_boxes = torch.cat([v["ref_boxes"] for v in references])
+            # match_reference = ref_boxes[..., :2]
+            # ref_id_embed = self.ref_id_embed(match_hs)
+            # ref_id_feature = ref_id_embed.clone()
+            # ref_id_embed = self.emb_scale * F.normalize(ref_id_embed)
+            # ref_id_embed = self.light_id_head(ref_id_embed.contiguous())
+            # tmp = self.ref_embed(match_hs)
+            # tmp += ref_boxes
+            # ref_coords = tmp.sigmoid()
+            ref_coords = []
+            ref_boxes = torch.cat([v["ref_boxes"] for v in references])
+            for lvl in range(match_hs.shape[0]):
+                if lvl == 0:
+                    reference = ref_boxes[..., :2]
+                else:
+                    reference = match_inter_references[lvl - 1]
+                reference = inverse_sigmoid(reference)
+                if lvl == match_hs.shape[0] - 1:
+                    ref_id_embed = self.ref_id_embed(match_hs[lvl])
+                    ref_id_feature = ref_id_embed.clone()
+                    ref_id_embed = self.emb_scale * F.normalize(ref_id_embed)
+                    ref_id_embed = self.light_id_head(ref_id_embed.contiguous())
+                tmp = self.ref_embed[lvl](match_hs[lvl])
+                tmp += reference
+                ref_coords.append(tmp.sigmoid())
 
         outputs_classes = []
         outputs_coords = []
@@ -255,9 +258,9 @@ class DeformableMatchTrack(nn.Module):
             if lvl == hs.shape[0] - 1:
                 outputs_id_embed = self.id_embed(hs[lvl])
                 outputs_id_features.append(outputs_id_embed.clone())
-                # outputs_id_embed = self.emb_scale * F.normalize(outputs_id_embed)
-                # outputs_id_embed = self.light_id_head(outputs_id_embed.contiguous())
-                outputs_id_embed = None
+                outputs_id_embed = self.emb_scale * F.normalize(outputs_id_embed)
+                outputs_id_embed = self.light_id_head(outputs_id_embed.contiguous())
+                # outputs_id_embed = None
                 outputs_id_embeds.append(outputs_id_embed)
             # next_center_tmp = self.offset_embed[lvl](hs[lvl])
             ##########################
@@ -294,10 +297,10 @@ class DeformableMatchTrack(nn.Module):
             enc_outputs_coord = enc_outputs_coord_unact.sigmoid()
             out['enc_outputs'] = {'pred_logits': enc_outputs_class, 'pred_boxes': enc_outputs_coord}
         
-        if references is not None:
-            out['ref_outputs'] = {'ref_coords': ref_coords,
+        if references is not None and match_hs is not None:
+            out['ref_outputs'] = {'ref_coords': ref_coords[-1],
                'ref_id_embeds': ref_id_embed, 'ref_id_features': ref_id_feature}
-            # out['aux_ref_outputs'] = [{'ref_coords': a} for a in ref_coords[:-1]]
+            out['aux_ref_outputs'] = [{'ref_coords': a} for a in ref_coords[:-1]]
         return out
 
     @torch.jit.unused
@@ -394,20 +397,21 @@ class SetCriterion(nn.Module):
         else:
             target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
             target_ids = torch.cat([t['ids'][i] for t, (_, i) in zip(targets, indices)], dim=0).long()
-        valids_ids = torch.where(target_ids>-1)[0]
-        target_ids = target_ids[valids_ids]
-        outputs_src_id_logits = outputs['id_embeds'][idx][valids_ids].contiguous()
-        # loss_ids = self.IDLoss(outputs_src_id_logits, target_ids)
-        target_ids_onehot = torch.zeros([outputs_src_id_logits.shape[0], outputs_src_id_logits.shape[1] + 1],
-                                        dtype=outputs_src_id_logits.dtype, layout=outputs_src_id_logits.layout, device=outputs_src_id_logits.device)
-        target_ids_onehot.scatter_(1, target_ids.unsqueeze(-1), 1)
+        if 'id_embeds' in outputs:
+            valids_ids = torch.where(target_ids>-1)[0]
+            target_ids = target_ids[valids_ids]
+            outputs_src_id_logits = outputs['id_embeds'][idx][valids_ids].contiguous()
+            # loss_ids = self.IDLoss(outputs_src_id_logits, target_ids)
+            target_ids_onehot = torch.zeros([outputs_src_id_logits.shape[0], outputs_src_id_logits.shape[1] + 1],
+                                             dtype=outputs_src_id_logits.dtype, layout=outputs_src_id_logits.layout, device=outputs_src_id_logits.device)
+            target_ids_onehot.scatter_(1, target_ids.unsqueeze(-1), 1)
 
-        target_ids_onehot = target_ids_onehot[:,:-1]
-        loss_ids = sigmoid_focal_loss(outputs_src_id_logits, target_ids_onehot, reduction='sum', alpha=self.focal_alpha, gamma=2) / max(1, outputs_src_id_logits.shape[0])
-        losses = {'loss_ids': loss_ids}
-        if log:
-            # TODO this should probably be a separate loss, not hacked in this one here
-            losses['id_class_error'] = 100 - accuracy(outputs_src_id_logits, target_ids)[0]
+            target_ids_onehot = target_ids_onehot[:,:-1]
+            loss_ids = sigmoid_focal_loss(outputs_src_id_logits, target_ids_onehot, reduction='sum', alpha=self.focal_alpha, gamma=2) / max(1, outputs_src_id_logits.shape[0])
+            losses = {'loss_ids': loss_ids}
+            if log:
+                # TODO this should probably be a separate loss, not hacked in this one here
+                losses['id_class_error'] = 100 - accuracy(outputs_src_id_logits, target_ids)[0]
         ##########################
         loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
         losses['loss_bbox'] = loss_bbox.sum() / num_boxes
@@ -421,15 +425,29 @@ class SetCriterion(nn.Module):
     def loss_match(self, outputs, targets, indices, num_boxes, log=True, is_next=False):
         assert is_next is True
         losses = {}
-        target_next_centers = torch.cat([t['gt_ref_boxes'] for t in targets], dim=0)
-        src_next_centers = torch.cat([o['ref_coords'] for o in outputs], dim=0)
+        if 'ref_outputs' not in outputs:
+            device = outputs['pred_boxes'].device
+            losses['loss_offset'] = torch.Tensor([0.]).mean().to(device)
+            losses['aux_loss_offset_0'] = torch.Tensor([0.]).mean().to(device)
+            losses['aux_loss_offset_1'] = torch.Tensor([0.]).mean().to(device)
+            losses['match_loss_ids'] = torch.Tensor([0.]).mean().to(device)
+            return losses
+
+        target_next_centers = torch.cat([t['gt_ref_boxes'][..., :2] for t in targets], dim=0)
+        src_next_centers = outputs['ref_outputs']['ref_coords'].flatten(0, 1)
         loss_offset = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
         losses['loss_offset'] = loss_offset.sum() / num_boxes
+        aux_outputs = outputs['aux_ref_outputs']
+        for i, aux_output in enumerate(aux_outputs):
+            src_next_centers = aux_output['ref_coords'].flatten(0, 1)
+            loss_offset = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
+            losses[f'aux_loss_offset_{i}'] = loss_offset.sum() / num_boxes
         # id
-        target_ids = torch.cat([t['ref_ids'] for t in targets], dim=0)
+        target_ids = torch.cat([t['gt_ref_ids'] for t in targets], dim=0).long()
         valids_ids = torch.where(target_ids>-1)[0]
         target_ids = target_ids[valids_ids]
-        outputs_src_id_logits = torch.cat([o['ref_id_embeds'] for o in outputs], dim=0)[valids_ids].contiguous()
+        outputs_src_id_logits = outputs['ref_outputs']['ref_id_embeds'].flatten(0, 1)
+        outputs_src_id_logits = outputs_src_id_logits[valids_ids].contiguous()
         # loss_ids = self.IDLoss(outputs_src_id_logits, target_ids)
         target_ids_onehot = torch.zeros([outputs_src_id_logits.shape[0], outputs_src_id_logits.shape[1] + 1],
                                         dtype=outputs_src_id_logits.dtype, layout=outputs_src_id_logits.layout, device=outputs_src_id_logits.device)
@@ -475,8 +493,11 @@ class SetCriterion(nn.Module):
                 "idx_map": Tensor of dim [num_refer_boxes, num_targets], map the refer index to the target index
         """
         outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs' and k != 'enc_outputs' and k != 'ref_outputs' and k != 'aux_ref_outputs'}
-        ref_outputs = outputs['ref_outputs']
-        ori_indices, ref_indices = refer_matcher(ref_outputs, references)
+        if references is not None and 'ref_outputs' in outputs:
+            ref_outputs = outputs['ref_outputs']
+            ori_indices, ref_indices = self.refer_matcher(ref_outputs, outputs_without_aux, references)
+        else:
+            ref_indices = None
 
         # Retrieve the matching between the outputs of the last layer and the targets
         indices = self.matcher(outputs_without_aux, targets, ref_indices, is_next)
@@ -520,7 +541,7 @@ class SetCriterion(nn.Module):
                     bt['next_labels'] = torch.zeros_like(bt['next_labels'])
                 else:
                     bt['labels'] = torch.zeros_like(bt['labels'])
-            indices = self.matcher(enc_outputs, bin_targets, ref_indices, is_next)
+            indices = self.matcher(enc_outputs, bin_targets, None, is_next)
             for loss in self.losses:
                 kwargs = {}
                 kwargs['is_next'] = is_next
@@ -531,13 +552,16 @@ class SetCriterion(nn.Module):
                 l_dict = {k + f'_enc': v for k, v in l_dict.items()}
                 losses.update(l_dict)
         # ref outputs
-        if 'ref_outputs' in outputs:
+        if is_next is True:
             # regression loss for ref outputs
-            ref_num_boxes = sum(len(r["gt_ref_boxes"]) for r in references)
-            ref_num_boxes = torch.as_tensor([ref_num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
-            if is_dist_avail_and_initialized():
-                torch.distributed.all_reduce(ref_num_boxes)
-            ref_num_boxes = torch.clamp(ref_num_boxes / get_world_size(), min=1).item()
+            if references is None:
+                ref_num_boxes = num_boxes
+            else:
+                ref_num_boxes = sum(len(r["gt_ref_boxes"]) for r in references)
+                ref_num_boxes = torch.as_tensor([ref_num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
+                if is_dist_avail_and_initialized():
+                    torch.distributed.all_reduce(ref_num_boxes)
+                ref_num_boxes = torch.clamp(ref_num_boxes / get_world_size(), min=1).item()
             losses.update(self.loss_match(outputs, references, None, ref_num_boxes, is_next=is_next))
 
         return losses
@@ -582,7 +606,7 @@ class PostProcess(nn.Module):
         filenames = [filename] * len(scores)
         results = [{'filename': f, 'scores': s, 'labels': l, 'boxes': b} for f, s, l, b in zip(
             filenames, scores, labels, boxes)]
-        results[-1]['id_features'] =  id_features.reshape(-1, id_features.shape[
+        results[-1]['id_features'] = id_features.reshape(-1, id_features.shape[
             -1])[topk_boxes[0]]
         results[-1]['track_idx'] = track_idx[topk_boxes[0]]
 
@@ -624,17 +648,18 @@ def build_model(cfg, device):
     )
     weight_dict = {'loss_ce': cfg.LOSS.CLS_LOSS_COEF, 'loss_bbox': cfg.LOSS.BBOX_LOSS_COEF}
     weight_dict['loss_giou'] = cfg.LOSS.GIOU_LOSS_COEF
-    weight_dict['loss_ids'] = cfg.LOSS.ID_LOSS_COEF
-    weight_dict['loss_offset'] = cfg.LOSS.OFFSET_LOSS_COEF
-    weight_dict['match_loss_ids'] = cfg.LOSS.ID_LOSS_COEF
     # TODO this is a hack
     if cfg.LOSS.AUX_LOSS:
         aux_weight_dict = {}
         for i in range(cfg.TRANSFORMER.DEC_LAYERS - 1):
             aux_weight_dict.update({k + f'_{i}': v for k, v in weight_dict.items()})
         aux_weight_dict.update({k + f'_enc': v for k, v in weight_dict.items()})
-        aux_weight_dict.pop('loss_next_centers_enc')
         weight_dict.update(aux_weight_dict)
+    weight_dict['loss_offset'] = cfg.LOSS.OFFSET_LOSS_COEF
+    weight_dict['aux_loss_offset_0'] = cfg.LOSS.OFFSET_LOSS_COEF
+    weight_dict['aux_loss_offset_1'] = cfg.LOSS.OFFSET_LOSS_COEF
+    weight_dict['match_loss_ids'] = cfg.LOSS.ID_LOSS_COEF
+    weight_dict['loss_ids'] = cfg.LOSS.ID_LOSS_COEF
 
     losses = ['labels', 'boxes', 'cardinality']
     # num_classes, matcher, weight_dict, losses, focal_alpha=0.25

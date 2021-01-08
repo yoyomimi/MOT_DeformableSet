@@ -223,10 +223,10 @@ class MatchTrackMatcher(nn.Module):
 
     We do a 1-to-1 matching of the best predictions, while the others are un-matched (new detections).
     """
-
     def __init__(self,
                  cost_feat: float = 0.98,
-                 cost_limit: float = 1.0,
+                 det_thr: float = 0.2,
+                 cost_limit: float = 0.5,
                  ):
         """Creates the matcher
 
@@ -236,6 +236,7 @@ class MatchTrackMatcher(nn.Module):
         super().__init__()
         self.cost_feat = cost_feat
         # self.cost_limit = cost_limit
+        self.det_thr = det_thr
         self.cost_limit = 1.0
         assert cost_feat != 0 or cost_loc != 0, "all costs cant be 0"
     
@@ -250,34 +251,35 @@ class MatchTrackMatcher(nn.Module):
         with torch.no_grad():
             bs, num_queries = outputs["id_features"].shape[:2]
             # We flatten to compute the cost matrices in a batch
-            id_features = ref_outputs["id_features"].flatten(0, 1)
-            pred_boxes = ref_outputs["pred_boxes"].flatten(0, 1) # [batch_size * num_queries, 4]
+            id_features = ref_outputs["ref_id_features"].flatten(0, 1)
+            pred_boxes = ref_outputs["ref_coords"].flatten(0, 1) # [batch_size * num_queries, 4]
 
             src_id_features = outputs["id_features"].flatten(0, 1)
             src_boxes = outputs["pred_boxes"].flatten(0, 1)
-            
+            out_prob = outputs["pred_logits"].flatten(0, 1).sigmoid()[..., 1]
 
             # Also concat the target labels and boxes
             ref_features = torch.cat([v["ref_features"] for v in references])
             ref_boxes = torch.cat([v["ref_boxes"] for v in references])
             input_size = torch.cat([v["input_size"] for v in references])
-            scale = torch.cat([input_size, input_size], dim=1)
+            scale = torch.cat([input_size, input_size], dim=1).to(ref_boxes.device)
+            pred_boxes = torch.cat([pred_boxes, ref_boxes[..., 2:]], dim=1)
             ref_boxes = ref_boxes * scale
             pred_boxes = pred_boxes * scale
             src_boxes = src_boxes * scale
-            ref_boxes[..., 2] /= ref_boxes[..., 3]
             pred_boxes[..., 2] /= pred_boxes[..., 3]
             src_boxes[..., 2] /= src_boxes[..., 3]
             
             assert len(ref_features) == len(ref_boxes)
             # Compute the feature similarity
             ref_distance = torch.diag(self.cosine_distance(id_features, ref_features))
-            cost_feature = self.cosine_distance(src_features, id_features)
+            cost_feature = (self.cosine_distance(src_id_features, id_features) + ref_distance) / 2.0
             # Compute the distance ** 2 between boxes 
-            cost_distance = torch.cdist(src_boxes, pred_boxes, p=2) * ref_distance
+            cost_distance = torch.cdist(src_boxes, pred_boxes, p=2)
 
             # Final cost matrix
-            C = (self.cost_feat * cost_feature + (1 - self.cost_feat)) * cost_distance 
+            C = self.cost_feat * cost_feature + (1 - self.cost_feat) * cost_distance
+            C[out_prob<self.det_thr] = inf
             C = C.view(bs, num_queries, -1).cpu()
 
             sizes = [len(v["ref_boxes"]) for v in references]

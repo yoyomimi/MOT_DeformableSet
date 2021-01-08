@@ -32,32 +32,43 @@ class MatchCustomTaskDataset(Dataset):
         self.max_objs = max_obj
         id_base = 0
         max_id = 0
-        # cur_id = 0
+        pre_mot_video = None
+        pre_mot_frame = None
         for i, anno in enumerate(self.annotations):
-            # anno['ann']['extra_anns'] = np.array(anno['ann']['extra_anns']).reshape(-1, )
-            # if len(anno['ann']['extra_anns']) == 0:
-            #     anno['ann']['extra_anns'] = -np.ones(len(anno['ann']['bboxes'])).reshape(-1, )
-            # for j, single_id in enumerate(anno['ann']['extra_anns']):
-            #     if cur_id > 355567:
-            #         anno['ann']['extra_anns'][j] = -1
-            #     else:
-            #         anno['ann']['extra_anns'][j] = cur_id
-            #         cur_id += 1
             if i > 0 and i in count:
                 id_base = max_id + 1
             anno['ann']['extra_anns'] = np.array(anno['ann']['extra_anns']).reshape(-1, )
             if(len(anno['ann']['extra_anns'])>0):
                 anno['ann']['extra_anns'][anno['ann']['extra_anns']>-1] += id_base
                 max_id = max(max_id, max(anno['ann']['extra_anns']))
+
+            # get next_anno
+            anno['next_ann_id'] = -1
             if istrain is False:
+                flag_bad = 0
                 self.ids.append(i)
             else:
-                flag_bad = 0
+                flag_bad = 1
                 boxes = anno['ann']['bboxes']
                 labels = anno['ann']['labels']
-                if (len(boxes) >= 0 and len(boxes) <= max_obj and 
+                if (len(boxes) > 0 and len(boxes) <= max_obj and 
                      labels.sum()==len(labels)):
+                    flag_bad = 0
                     self.ids.append(i)
+            if flag_bad == 0 and anno['filename'][:3] == 'MOT':
+                video_name = anno['filename'].split('/')[2]
+                frame = int(anno['filename'].split('/')[4].split('.')[0])
+                if pre_mot_video is None or pre_mot_frame is None:
+                    pre_mot_video = video_name
+                    pre_mot_frame = frame
+                else:
+                    if video_name == pre_mot_video and frame == pre_mot_frame + 1 and i > 0:
+                        self.annotations[i-1]['next_ann_id'] = i
+                        pre_mot_video = video_name
+                        pre_mot_frame = frame
+                    else:
+                        pre_mot_frame = None
+                        pre_mot_video = None
         # print(cur_id)
         id_base = max_id
         print(id_base)
@@ -73,19 +84,9 @@ class MatchCustomTaskDataset(Dataset):
                 box = bboxes[:, :4]， label = bboxes[:, 4]
             index (int): image index
         """
-        # next frame
-        def __getitem__(self, index):
-        """
-        Return:
-            data (tensor): a image
-            bboxes (tensor): shape: `(num_object, 4)`
-                box = bboxes[:, :4]， label = bboxes[:, 4]
-            index (int): image index
-        """
-        # next frame
-        while(self.anno_info[index]['next_ann_id']==-1):
-            index = random.choice(np.arange(len(self.anno_info)))
-        anno = self.anno_info[index]
+        # affine the same pic
+        affine_flag = (self.annotations[self.ids[index]]['next_ann_id']==-1)
+        anno = self.annotations[self.ids[index]]
         filename = anno['filename']
         img_path = os.path.join(self.img_root, filename)
         if not osp.exists(img_path):
@@ -111,67 +112,72 @@ class MatchCustomTaskDataset(Dataset):
             ids=dataset_track_ids
         )
 
-        next_anno = self.anno_info[anno['next_ann_id']]
-        next_filename = next_anno['filename']
-        next_img_path = os.path.join(self.img_root, next_filename)
-        if not osp.exists(next_img_path):
-            logging.error("Cannot found image data: " + next_img_path)
-            raise FileNotFoundError
-        next_img = Image.open(next_img_path).convert('RGB')
-        if next_img.size != img.size:
-            import pdb; pdb.set_trace()
-        assert next_img.size == img.size
-        # get warp matrix
-        # im1 = cv2.cvtColor(np.array(img),cv2.COLOR_RGB2BGR)
-        # im2 = cv2.cvtColor(np.array(next_img),cv2.COLOR_RGB2BGR)
-        # try:
-        #     warp_matrix, _ = self.get_warp_matrix(im1, im2)
-        #     warp_matrix = torch.as_tensor(warp_matrix).reshape(3, 3)
-        # except:
-        #     warp_matrix = torch.as_tensor([])
-
-        ori_next_boxes = next_anno['ann']['bboxes']
-        ori_next_labels = next_anno['ann']['labels']
-        next_dataset_track_ids = next_anno['ann']['extra_anns']
-        num_object = min(len(ori_next_boxes), self.max_objs)
-        if num_object == 0:
-            ori_next_boxes = np.array([])
-            ori_next_labels = np.array([])
-            next_vis_ratios = np.array([])
-        ori_next_boxes = torch.from_numpy(ori_next_boxes.reshape(-1, 4)[:num_object].astype(np.float32))
-        ori_next_labels = torch.from_numpy(ori_next_labels.reshape(-1, )[:num_object].astype(np.int64))
-        next_vis_ratios = torch.from_numpy(next_vis_ratios.reshape(-1, )[:num_object].astype(np.float32))
-        next_dataset_track_ids = torch.from_numpy(next_dataset_track_ids.reshape(-1, )[:num_object].astype(np.float32))
-        next_target = dict(
-            boxes=ori_next_boxes,
-            labels=ori_next_labels,
-        )
-        img_list = [img, next_img]
-        target_list = [target, next_target]
-
-        # TODO centertrack image transform for the offset train
-
-        if self.transform is not None:
-            img_list, target_list = self.transform(
-                img_list, target_list
+        if affine_flag is False:
+            next_anno = self.annotations[anno['next_ann_id']]
+            next_filename = next_anno['filename']
+            next_img_path = os.path.join(self.img_root, next_filename)
+            if not osp.exists(next_img_path):
+                logging.error("Cannot found image data: " + next_img_path)
+                raise FileNotFoundError
+            next_img = Image.open(next_img_path).convert('RGB')
+            if next_img.size != img.size:
+                import pdb; pdb.set_trace()
+            assert next_img.size == img.size
+            ori_next_boxes = next_anno['ann']['bboxes']
+            ori_next_labels = next_anno['ann']['labels']
+            next_dataset_track_ids = next_anno['ann']['extra_anns']
+            num_object = min(len(ori_next_boxes), self.max_objs)
+            if num_object == 0:
+                ori_next_boxes = np.array([])
+                ori_next_labels = np.array([])
+            ori_next_boxes = torch.from_numpy(ori_next_boxes.reshape(-1, 4)[:num_object].astype(np.float32))
+            ori_next_labels = torch.from_numpy(ori_next_labels.reshape(-1, )[:num_object].astype(np.int64))
+            next_dataset_track_ids = torch.from_numpy(next_dataset_track_ids.reshape(-1, )[:num_object].astype(np.float32))
+            next_target = dict(
+                boxes=ori_next_boxes,
+                labels=ori_next_labels,
+                ids=next_dataset_track_ids
             )
-        img, next_img = img_list
-        target, next_target = target_list
+            img_list = [img, next_img]
+            target_list = [target, next_target]
+
+            # TODO centertrack image transform for the offset train
+
+            if self.transform is not None:
+                img_list, target_list = self.transform(
+                    img_list, target_list
+                )
+            img, next_img = img_list
+            target, next_target = target_list
+        else:
+            if self.transform is not None:
+                img_list, target_list = self.transform(
+                    img, target
+                )
+            img, next_img = img_list
+            target, next_target = target_list
 
         boxes = target['boxes']
         labels = target['labels']
+        dataset_track_ids = target['ids']
         ori_next_boxes = next_target['boxes']
         ori_next_labels = next_target['labels']
+        next_dataset_track_ids = next_target['ids']
         assert len(dataset_track_ids) == len(boxes)
         assert len(next_dataset_track_ids) == len(ori_next_boxes)
         # match track_id
-        match_mask = []
-        valid_pre_mask = []
-        for pre_idx, tid in enumerate(dataset_track_ids):
-            match_index = torch.where(next_dataset_track_ids==tid)[0]
-            if len(match_index) > 0:
-                match_mask.append(match_index[0])
-                valid_pre_mask.append(pre_idx)
+        if affine_flag is False:
+            match_mask = []
+            valid_pre_mask = []
+            for pre_idx, tid in enumerate(dataset_track_ids):
+                match_index = torch.where(next_dataset_track_ids==tid)[0]
+                if len(match_index) > 0:
+                    match_mask.append(match_index[0])
+                    valid_pre_mask.append(pre_idx)
+        else:
+            valid_idx = next_target['valid_idx']
+            match_mask = list(range(len(next_dataset_track_ids)))
+            valid_pre_mask = np.array(list(range(len(dataset_track_ids))))[valid_idx]
         match_mask = torch.as_tensor(match_mask).reshape(-1, ).long()
         valid_pre_mask = torch.as_tensor(valid_pre_mask).reshape(-1, ).long()
 
@@ -197,7 +203,6 @@ class MatchCustomTaskDataset(Dataset):
             idx_map=match_mask,
             matched_idx=valid_pre_mask,
             ref_boxes=ref_boxes,
-            warp_matrix=warp_matrix,
             gt_ref_ids=gt_ref_ids
         )
         return img, next_img, out_target, filename

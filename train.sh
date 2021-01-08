@@ -13,4 +13,4 @@
 # srun --partition=$PARTITION --mpi=pmi2 -n 32 --gres=gpu:8 --ntasks-per-node=8 --job-name=MTL --kill-on-bad-exit=1 python3 tools/train.py --cfg configs/deformable_track.yaml
 
 PARTITION=VA
-srun --partition=$PARTITION --mpi=pmi2 -n 32 --gres=gpu:8 --ntasks-per-node=8 --job-name=MTL --kill-on-bad-exit=1 python3 tools/train.py --cfg configs/deformable_track_warp.yaml
+srun --partition=$PARTITION --mpi=pmi2 -n 16 --gres=gpu:8 --ntasks-per-node=8 --job-name=MTL --kill-on-bad-exit=1 -x SH-IDC1-10-5-38-[38-49] python3 tools/train.py --cfg configs/deformable_macthtrack.yaml

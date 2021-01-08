@@ -388,16 +388,23 @@ class DeformableMatchTransformer(nn.Module):
         # decoder
         hs, inter_references = self.decoder(tgt, reference_points, memory,
                                             spatial_shapes, level_start_index, valid_ratios, query_embed, mask_flatten)
-        # match
-        joint_memory = memory + references['prev_memory']
-        prev_points = references['ref_boxes'][..., :2]
-        match_pos_trans_out = self.pos_trans_norm(self.pos_trans(self.get_proposal_pos_embed(
-            inverse_sigmoid(references['ref_boxes']))))
-        match_query_embed, match_tgt = torch.split(match_pos_trans_out, c, dim=1)
-        match_hs, match_inter_references = self.match_decoder(match_tgt, rprev_points, joint_memory, spatial_shapes,
-            level_start_index, valid_ratios, match_query_embed, mask_flatten)
-
         inter_references_out = inter_references
+
+        # match
+        match_hs = None
+        match_inter_references = None
+        if references is not None:
+            prev_memory = torch.cat([v['prev_memory'] for v in references])
+            ref_boxes = torch.cat([v["ref_boxes"] for v in references])
+            if len(ref_boxes) > 0:
+                joint_memory = memory + prev_memory
+                prev_points = ref_boxes[..., :2].unsqueeze(0)
+                match_pos_trans_out = self.pos_trans_norm(self.pos_trans(self.get_proposal_pos_embed(
+                    inverse_sigmoid(ref_boxes).unsqueeze(0))))
+                match_query_embed, match_tgt = torch.split(match_pos_trans_out, c, dim=2)
+                match_hs, match_inter_references = self.match_decoder(match_tgt, prev_points, joint_memory, spatial_shapes,
+                    level_start_index, valid_ratios, match_query_embed, mask_flatten)
+        
         if self.two_stage:
             return hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact, ref_indices, memory, match_hs, match_inter_references
         return hs, init_reference_out, inter_references_out, None, None, None, None, None, None
