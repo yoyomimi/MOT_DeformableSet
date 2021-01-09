@@ -51,10 +51,11 @@ class MatchCustomTaskDataset(Dataset):
                 flag_bad = 1
                 boxes = anno['ann']['bboxes']
                 labels = anno['ann']['labels']
-                if (len(boxes) > 0 and len(boxes) <= max_obj and 
+                if (len(boxes) >= 0 and len(boxes) <= max_obj and 
                      labels.sum()==len(labels)):
                     flag_bad = 0
                     self.ids.append(i)
+                    
             if flag_bad == 0 and anno['filename'][:3] == 'MOT':
                 video_name = anno['filename'].split('/')[2]
                 frame = int(anno['filename'].split('/')[4].split('.')[0])
@@ -175,7 +176,10 @@ class MatchCustomTaskDataset(Dataset):
                     match_mask.append(match_index[0])
                     valid_pre_mask.append(pre_idx)
         else:
-            valid_idx = next_target['valid_idx']
+            if 'valid_idx' in next_target:
+                valid_idx = next_target['valid_idx']
+            else:
+                valid_idx = []
             match_mask = list(range(len(next_dataset_track_ids)))
             valid_pre_mask = np.array(list(range(len(dataset_track_ids))))[valid_idx]
         match_mask = torch.as_tensor(match_mask).reshape(-1, ).long()

@@ -498,7 +498,6 @@ class SetCriterion(nn.Module):
             ori_indices, ref_indices = self.refer_matcher(ref_outputs, outputs_without_aux, references)
         else:
             ref_indices = None
-
         # Retrieve the matching between the outputs of the last layer and the targets
         indices = self.matcher(outputs_without_aux, targets, ref_indices, is_next)
         self.out_indices = indices
@@ -569,9 +568,13 @@ class SetCriterion(nn.Module):
 
 class PostProcess(nn.Module):
     """ This module converts the model's output into the format expected by the coco api"""
+    def __init__(self):
+        super().__init__()
+        from libs.models.matcher import MatchTrackMatcher
+        self.refer_matcher = MatchTrackMatcher(det_thr=0.35, cost_limit=1.0)
 
     @torch.no_grad()
-    def forward(self, outputs, filename, target_sizes, ref_indices=None):
+    def forward(self, outputs, filename, target_sizes, references=None):
         """ Perform the computation
         Parameters:
             outputs: raw outputs of the model
@@ -584,13 +587,21 @@ class PostProcess(nn.Module):
 
         assert len(out_logits) == len(target_sizes)
         assert target_sizes.shape[1] == 2
+        # and from relative [0, 1] to absolute [0, height] coordinates
+        img_h, img_w = target_sizes.unbind(1)
+        scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
+
         track_idx = -torch.ones(out_bbox.shape[1]).long()
         # TODO get strack idx map with box
-        if ref_indices is not None:
+        if references is not None:
+            ref_outputs = outputs['ref_outputs']
+            _, ref_indices = self.refer_matcher(ref_outputs, outputs, references)
             assert len(ref_indices) == 1
             src_idx, tgt_idx = ref_indices[0]
-            track_idx[src_idx] = tgt_idx
-
+            for sid, tid in zip(src_idx, tgt_idx):
+                track_idx[sid] = tid
+            ref_coords = ref_outputs['ref_coords']
+            ref_id_features = ref_outputs['ref_id_features']
         prob = out_logits.sigmoid()
         topk_values, topk_indexes = torch.topk(prob.view(out_logits.shape[0], -1), 100, dim=1)
         scores = topk_values
@@ -598,17 +609,16 @@ class PostProcess(nn.Module):
         labels = topk_indexes % out_logits.shape[2]
         boxes = box_ops.box_cxcywh_to_xyxy(out_bbox)
         boxes = torch.gather(boxes, 1, topk_boxes.unsqueeze(-1).repeat(1,1,4))
-        # and from relative [0, 1] to absolute [0, height] coordinates
-        img_h, img_w = target_sizes.unbind(1)
-        scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
         boxes = boxes * scale_fct[:, None, :]
-        
         filenames = [filename] * len(scores)
         results = [{'filename': f, 'scores': s, 'labels': l, 'boxes': b} for f, s, l, b in zip(
             filenames, scores, labels, boxes)]
         results[-1]['id_features'] = id_features.reshape(-1, id_features.shape[
             -1])[topk_boxes[0]]
         results[-1]['track_idx'] = track_idx[topk_boxes[0]]
+        if references is not None:
+            results[-1]['ref_coords'] = ref_coords * scale_fct[:, None, :2]
+            results[-1]['ref_id_features'] = ref_id_features
 
         return results
 

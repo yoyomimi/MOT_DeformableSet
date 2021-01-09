@@ -14,11 +14,12 @@ from libs.models.tracker import matching
 
 
 class STrack(BaseTrack):
-    def __init__(self, tlwh, motion, score, temp_feat, logger=None, buffer_size=30):
+    def __init__(self, tlwh, score, temp_feat, logger=None, buffer_size=30):
 
         # wait activate
         self._tlwh = np.asarray(tlwh, dtype=np.float) # cur loc
-        self.motion = np.asarray(motion, dtype=np.float)
+        self.prev_tlwh = np.asarray(tlwh, dtype=np.float)
+        self.motion = None
         self.is_activated = False
 
         self.score = score
@@ -31,15 +32,19 @@ class STrack(BaseTrack):
 
         self.logger = logger
 
-    def update_features(self, feat):
-        # feat /= np.linalg.norm(feat)
+    def update_features(self, feat, ref_feat=None):
+        # if ref_feat is not None:
+        #     feat = ref_feat / np.linalg.norm(ref_feat)
+        # else:
+        #     feat /= np.linalg.norm(feat)
+        feat /= np.linalg.norm(feat)
         self.curr_feat = feat
         if self.smooth_feat is None:
             self.smooth_feat = feat
         else:
             self.smooth_feat = self.alpha * self.smooth_feat + (1 - self.alpha) * feat
         self.features.append(feat)
-        # self.smooth_feat /= np.linalg.norm(self.smooth_feat)
+        self.smooth_feat /= np.linalg.norm(self.smooth_feat)
 
     def activate(self, frame_id):
         """Start a new tracklet"""
@@ -57,6 +62,7 @@ class STrack(BaseTrack):
     def multi_predict(stracks, warp_matrix=None):
         if len(stracks) > 0:
             for i in range(len(stracks)):
+                stracks[i].prev_tlwh = stracks[i]._tlwh
                 stracks[i]._tlwh = stracks[i].tlwh
                 if warp_matrix is not None:
                     warp_matrix = warp_matrix.reshape(-1, 9)
@@ -67,8 +73,8 @@ class STrack(BaseTrack):
                     stracks[i]._tlwh[..., 0] = X/Z
                     stracks[i]._tlwh[..., 1] = Y/Z
 
-    def re_activate(self, new_track, frame_id, new_id=False):
-        self.update_features(new_track.curr_feat)
+    def re_activate(self, new_track, frame_id, new_id=False, ref_feat=None):
+        self.update_features(new_track.curr_feat, ref_feat)
         self.tracklet_len = 0
         self.state = TrackState.Tracked
         self.is_activated = True
@@ -76,7 +82,7 @@ class STrack(BaseTrack):
         if new_id:
             self.track_id = self.next_id()
 
-    def update(self, new_track, frame_id, update_feature=True):
+    def update(self, new_track, frame_id, update_feature=True, ref_feat=None):
         """
         Update a matched track
         :type new_track: STrack
@@ -87,13 +93,14 @@ class STrack(BaseTrack):
         self.frame_id = frame_id
         self.tracklet_len += 1
 
+        self.motion = (new_track._tlwh - self.prev_tlwh)[:2]
         self._tlwh = new_track._tlwh
         self.state = TrackState.Tracked
         self.is_activated = True
 
         self.score = new_track.score
         if update_feature:
-            self.update_features(new_track.curr_feat)
+            self.update_features(new_track.curr_feat, ref_feat)
 
     @property
     # @jit(nopython=True)
@@ -162,7 +169,8 @@ class SimpleTracker(object):
         self.buffer_size = int(frame_rate / 30.0 * track_buffer)
         self.max_time_lost = self.buffer_size
 
-    def update(self, dets, id_feature, motion, track_idx, logger=None, warp_matrix=None):
+    def update(self, dets, id_feature, ref_id_features, track_idx,
+               logger=None, warp_matrix=None):
         self.frame_id += 1
         activated_starcks = []
         refind_stracks = []
@@ -170,8 +178,8 @@ class SimpleTracker(object):
         removed_stracks = []
         if len(dets) > 0:
             '''Detections'''
-            detections = [STrack(STrack.tlbr_to_tlwh(tlbrs[:4]), m, tlbrs[4], f, 30) for
-                          (tlbrs, m, f) in zip(dets[:, :5], motion, id_feature)]
+            detections = [STrack(STrack.tlbr_to_tlwh(tlbrs[:4]), tlbrs[4], f, 30) for
+                          (tlbrs, f) in zip(dets[:, :5], id_feature)]
         else:
             detections = []
 
@@ -188,13 +196,14 @@ class SimpleTracker(object):
                 u_detection.append(idet)
                 continue
             track = self.strack_pool[itracked]
+            ref_feat = ref_id_features[itracked]
             track_valid[itracked] = 0
             det = detections[idet]
             if track.state == TrackState.Tracked:
-                track.update(detections[idet], self.frame_id)
+                track.update(detections[idet], self.frame_id, ref_feat=ref_feat)
                 activated_starcks.append(track)
             else:
-                track.re_activate(det, self.frame_id, new_id=False)
+                track.re_activate(det, self.frame_id, new_id=False, ref_feat=ref_feat)
                 refind_stracks.append(track)
         
         ''' Step 2: First association, with embedding'''
@@ -274,7 +283,7 @@ class SimpleTracker(object):
         # TODO return additional references
         references = None
         id_features = torch.cat([torch.as_tensor(track.smooth_feat).reshape(1, -1) for track in self.strack_pool])
-        ref_boxes = torch.cat([torch.as_tensor(track.tlwh.reshape(1, -1)) for track in self.strack_pool])
+        ref_boxes = torch.cat([torch.as_tensor(track._tlwh.reshape(1, -1)) for track in self.strack_pool])
         ref_boxes[..., :2] += 0.5 * ref_boxes[..., 2:]
         idx_map = torch.range(0, len(ref_boxes)-1)
         references = [
