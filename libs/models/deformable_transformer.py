@@ -402,7 +402,7 @@ class DeformableMatchTransformer(nn.Module):
                 match_pos_trans_out = self.pos_trans_norm(self.pos_trans(self.get_proposal_pos_embed(
                     inverse_sigmoid(ref_boxes).unsqueeze(0))))
                 match_query_embed, match_tgt = torch.split(match_pos_trans_out, c, dim=2)
-                match_hs, match_inter_references = self.match_decoder(match_tgt, prev_points, joint_memory, spatial_shapes,
+                match_hs, match_inter_references = self.match_decoder(match_tgt, prev_points, joint_memory.detach(), spatial_shapes,
                     level_start_index, valid_ratios, match_query_embed, mask_flatten)
         
         if self.two_stage:

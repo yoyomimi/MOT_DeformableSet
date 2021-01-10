@@ -80,7 +80,7 @@ class TrackTrainer(BaseTrainer):
         out_id_features = self.model.module.out_id_features.detach()
         out_prev_boxes = self.model.module.out_pred_boxes.detach()
         # no detach
-        prev_memory = self.model.module.out_memory
+        prev_memory = self.model.module.out_memory.detach()
         assert len(indices) == len(targets)
         references = []
         for i in range(len(indices)):

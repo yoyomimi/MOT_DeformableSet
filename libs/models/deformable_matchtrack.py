@@ -571,7 +571,7 @@ class PostProcess(nn.Module):
     def __init__(self):
         super().__init__()
         from libs.models.matcher import MatchTrackMatcher
-        self.refer_matcher = MatchTrackMatcher(det_thr=0.35, cost_limit=1.0)
+        self.refer_matcher = MatchTrackMatcher(det_thr=0.38, cost_limit=1.0)
 
     @torch.no_grad()
     def forward(self, outputs, filename, target_sizes, references=None):
