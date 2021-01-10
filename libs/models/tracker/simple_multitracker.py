@@ -33,18 +33,15 @@ class STrack(BaseTrack):
         self.logger = logger
 
     def update_features(self, feat, ref_feat=None):
-        # if ref_feat is not None:
-        #     feat = ref_feat / np.linalg.norm(ref_feat)
-        # else:
-        #     feat /= np.linalg.norm(feat)
-        feat /= np.linalg.norm(feat)
+        if ref_feat is not None:
+            feat = ref_feat
+        # feat /= np.linalg.norm(feat)
         self.curr_feat = feat
         if self.smooth_feat is None:
             self.smooth_feat = feat
         else:
             self.smooth_feat = self.alpha * self.smooth_feat + (1 - self.alpha) * feat
         self.features.append(feat)
-        self.smooth_feat /= np.linalg.norm(self.smooth_feat)
 
     def activate(self, frame_id):
         """Start a new tracklet"""
@@ -74,6 +71,8 @@ class STrack(BaseTrack):
                     stracks[i]._tlwh[..., 1] = Y/Z
 
     def re_activate(self, new_track, frame_id, new_id=False, ref_feat=None):
+        self.motion = (new_track._tlwh - self.prev_tlwh)[:2]
+        self._tlwh = new_track._tlwh
         self.update_features(new_track.curr_feat, ref_feat)
         self.tracklet_len = 0
         self.state = TrackState.Tracked

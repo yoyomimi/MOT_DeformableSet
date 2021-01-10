@@ -78,7 +78,7 @@ def get_ip(ip_addr):
     for i in range(4):
         if ip_list[i][0] == '[':
             ip_list[i] = ip_list[i][1:].split(',')[0]
-    return f'tcp://{ip_list[0]}.{ip_list[1]}.{ip_list[2]}.{ip_list[3]}:2456'
+    return f'tcp://{ip_list[0]}.{ip_list[1]}.{ip_list[2]}.{ip_list[3]}:24356'
 
 def get_warp_matrix(src, dst, warp_mode = cv2.MOTION_HOMOGRAPHY, eps = 1e-5,
         max_iter = 100, scale = None, align = False):
@@ -509,14 +509,14 @@ if __name__ == '__main__':
     #               MOT17-14-SDP'''
     # data_root = os.path.join(data_dir, 'data/MOT17/test')
     # val mot17
-    # seqs_str = '''MOT17-02-SDP
-    #               MOT17-04-SDP
-    #               MOT17-05-SDP
-    #               MOT17-09-SDP
-    #               MOT17-10-SDP
-    #               MOT17-11-SDP
-    #               MOT17-13-SDP'''
-    seqs_str = '''MOT17-13-SDP'''
+    seqs_str = '''MOT17-02-SDP
+                  MOT17-04-SDP
+                  MOT17-05-SDP
+                  MOT17-09-SDP
+                  MOT17-10-SDP
+                  MOT17-11-SDP
+                  MOT17-13-SDP'''
+    # seqs_str = '''MOT17-13-SDP'''
     data_root = os.path.join(data_dir, 'data/MOT17/train')
     # # val mot15
     # seqs_str = '''Venice-2
