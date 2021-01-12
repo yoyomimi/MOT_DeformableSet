@@ -1,4 +1,4 @@
-OUTPUT_ROOT: matchtrack_15_test
+OUTPUT_ROOT: matchtrack_15_test_bidetach_mot17test
 DIST_BACKEND: 'nccl'
 WORKERS: 4
 DEVICE: cuda

@@ -23,7 +23,6 @@ from configs import update_config
 from libs.datasets.collate import collect
 from libs.datasets.transform import EvalTransform
 from libs.models.tracker.simple_multitracker import SimpleTracker
-from libs.models.tracker.kalman_multitracker import SimpleKalmanTracker
 from libs.tracking_utils import visualization as vis
 from libs.tracking_utils.timer import Timer
 from libs.tracking_utils.evaluation import Evaluator
@@ -79,7 +78,7 @@ def get_ip(ip_addr):
     for i in range(4):
         if ip_list[i][0] == '[':
             ip_list[i] = ip_list[i][1:].split(',')[0]
-    return f'tcp://{ip_list[0]}.{ip_list[1]}.{ip_list[2]}.{ip_list[3]}:2246'
+    return f'tcp://{ip_list[0]}.{ip_list[1]}.{ip_list[2]}.{ip_list[3]}:12246'
 
 def get_warp_matrix(src, dst, warp_mode = cv2.MOTION_HOMOGRAPHY, eps = 1e-5,
         max_iter = 100, scale = None, align = False):
@@ -262,8 +261,7 @@ def eval_seq(cfg, device, img_path_list, model, postprocessors, data_type,
              min_box_area=100., frame_rate=30, use_cuda=True, logger=None):
     if logger is not None and save_dir and not osp.exists(save_dir):
         os.makedirs(save_dir)
-    # tracker = SimpleTracker(frame_rate=frame_rate)
-    tracker = SimpleKalmanTracker(frame_rate=frame_rate)
+    tracker = SimpleTracker(frame_rate=frame_rate)
     timer = Timer()
     results = []
     frame_id = 0
@@ -502,24 +500,24 @@ if __name__ == '__main__':
     #               Venice-1'''
     # data_root = os.path.join(data_dir, 'MOT15/images/test')
     # # test mot17
-    seqs_str = '''MOT17-01-SDP
-                  MOT17-03-SDP
-                  MOT17-06-SDP
-                  MOT17-07-SDP
-                  MOT17-08-SDP
-                  MOT17-12-SDP
-                  MOT17-14-SDP'''
-    data_root = os.path.join(data_dir, 'data/MOT17/test')
+    # seqs_str = '''MOT17-01-SDP
+    #               MOT17-03-SDP
+    #               MOT17-06-SDP
+    #               MOT17-07-SDP
+    #               MOT17-08-SDP
+    #               MOT17-12-SDP
+    #               MOT17-14-SDP'''
+    # data_root = os.path.join(data_dir, 'data/MOT17/test')
     # val mot17
-    # seqs_str = '''MOT17-02-SDP
-    #               MOT17-04-SDP
-    #               MOT17-05-SDP
-    #               MOT17-09-SDP
-    #               MOT17-10-SDP
-    #               MOT17-11-SDP
-    #               MOT17-13-SDP'''
+    seqs_str = '''MOT17-02-SDP
+                  MOT17-04-SDP
+                  MOT17-05-SDP
+                  MOT17-09-SDP
+                  MOT17-10-SDP
+                  MOT17-11-SDP
+                  MOT17-13-SDP'''
     # seqs_str = '''MOT17-13-SDP'''
-    # data_root = os.path.join(data_dir, 'data/MOT17/train')
+    data_root = os.path.join(data_dir, 'data/MOT17/train')
     # # val mot15
     # seqs_str = '''Venice-2
     #               KITTI-13
