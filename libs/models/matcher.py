@@ -15,7 +15,7 @@ from scipy.optimize import linear_sum_assignment
 import torch
 from torch import nn
 
-from libs.utils.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
+from libs.utils.box_ops import box_cxcywh_to_xyxy, box_xyxy_to_cxcywh, generalized_box_iou
 
 
 class HungarianMatcher(nn.Module):
@@ -30,7 +30,7 @@ class HungarianMatcher(nn.Module):
                  cost_class: float = 1,
                  cost_bbox: float = 1,
                  cost_giou: float = 1,
-                 cost_ids: float = 0.5):
+                 cost_ids: float = 1):
         """Creates the matcher
 
         Params:
@@ -77,12 +77,12 @@ class HungarianMatcher(nn.Module):
                 tgt_ids = torch.cat([v["next_labels"] for v in targets])
                 tgt_bbox = torch.cat([v["next_boxes"] for v in targets])
                 sizes = [len(v["next_boxes"]) for v in targets]
-                # tgt_feat_ids = torch.cat([v["next_ids"] for v in targets])
+                tgt_feat_ids = torch.cat([v["next_ids"] for v in targets])
             else:
                 tgt_ids = torch.cat([v["labels"] for v in targets])
                 tgt_bbox = torch.cat([v["boxes"] for v in targets])
                 sizes = [len(v["boxes"]) for v in targets]
-                # tgt_feat_ids = torch.cat([v["ids"] for v in targets])
+                tgt_feat_ids = torch.cat([v["ids"] for v in targets])
 
             # Compute the classification cost.
             alpha = 0.25
@@ -101,13 +101,14 @@ class HungarianMatcher(nn.Module):
             C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
             
             # feat ids
-            # out_feat_logits = outputs['id_embeds'].flatten(0, 1).contiguous().sigmoid()
-            # valids_ids = torch.where(tgt_feat_ids>-1)[0]
-            # if len(valid_ids) == len(tgt_bbox):
+            # if 'id_embeds' in outputs:
+            #     out_feat_logits = outputs['id_embeds'].flatten(0, 1).contiguous().sigmoid()
+            #     valids_ids = torch.where(tgt_feat_ids>-1)[0]
+            #     tgt_feat_ids = tgt_feat_ids[valids_ids].reshape(-1,).long()
             #     neg_cost_ids = (1 - alpha) * (out_feat_logits ** gamma) * (-(1 - out_feat_logits + 1e-8).log())
             #     pos_cost_ids = alpha * ((1 - out_feat_logits) ** gamma) * (-(out_feat_logits + 1e-8).log())
-            #     cost_ids = neg_cost_ids[:, tgt_feat_ids] - pos_cost_ids[:, tgt_feat_ids]
-            #     C = C + self.cost_ids * cost_ids
+            #     cost_ids = pos_cost_ids[:, tgt_feat_ids] - neg_cost_ids[:, tgt_feat_ids]
+            #     C[..., valids_ids] = C[..., valids_ids] + self.cost_ids * cost_ids
 
             C = C.view(bs, num_queries, -1)
 
@@ -117,7 +118,7 @@ class HungarianMatcher(nn.Module):
                 matched_out_idx = torch.cat([out_idx for (out_idx, _) in ref_indices])
                 tgt_ref_idx = torch.cat([tgt_idx for (_, tgt_idx) in ref_indices])
                 C[batch_ref_idx, matched_out_idx] = inf
-                C[batch_ref_idx, ..., tgt_ref_idx] = inf 
+                C[batch_ref_idx, ..., tgt_ref_idx] = inf
                 C[batch_ref_idx, matched_out_idx, tgt_ref_idx] = 0.0
 
             C = C.cpu()
@@ -225,7 +226,7 @@ class MatchTrackMatcher(nn.Module):
     """
     def __init__(self,
                  cost_feat: float = 0.98,
-                 det_thr: float = 0.2,
+                 det_thr: float = 0.3,
                  cost_limit: float = 0.5,
                  ):
         """Creates the matcher
@@ -237,7 +238,9 @@ class MatchTrackMatcher(nn.Module):
         self.cost_feat = cost_feat
         # self.cost_limit = cost_limit
         self.det_thr = det_thr
-        self.cost_limit = 1.0
+        self.cost_limit = 0.8
+        # self.cost_limit = -0.1
+        # self.det_thr = 1.1
         assert cost_feat != 0 or cost_loc != 0, "all costs cant be 0"
     
     def cosine_distance(self, x1, x2, eps=1e-8):
@@ -252,6 +255,7 @@ class MatchTrackMatcher(nn.Module):
             bs, num_queries = outputs["id_features"].shape[:2]
             # We flatten to compute the cost matrices in a batch
             id_features = ref_outputs["ref_id_features"].flatten(0, 1)
+            
             pred_boxes = ref_outputs["ref_coords"].flatten(0, 1) # [batch_size * num_queries, 4]
 
             src_id_features = outputs["id_features"].flatten(0, 1)
@@ -263,7 +267,14 @@ class MatchTrackMatcher(nn.Module):
             ref_boxes = torch.cat([v["ref_boxes"] for v in references])
             input_size = torch.cat([v["input_size"] for v in references])
             scale = torch.cat([input_size, input_size], dim=1).to(ref_boxes.device)
-            pred_boxes = torch.cat([pred_boxes, ref_boxes[..., 2:]], dim=1)
+            # pred_boxes = torch.cat([pred_boxes, ref_boxes[..., 2:]], dim=1)
+            pred_boxes = torch.cat([pred_boxes-ref_boxes[..., 2:4], pred_boxes+ref_boxes[
+                ..., 4:]], dim=-1) 
+            ref_boxes = torch.cat([ref_boxes[..., :2]-ref_boxes[..., 2:4], ref_boxes[
+                ..., :2]+ref_boxes[..., 4:]], dim=-1)
+            pred_boxes = box_xyxy_to_cxcywh(pred_boxes)
+            ref_boxes = box_xyxy_to_cxcywh(ref_boxes)
+
             ref_boxes = ref_boxes * scale
             pred_boxes = pred_boxes * scale
             src_boxes = src_boxes * scale
@@ -273,12 +284,17 @@ class MatchTrackMatcher(nn.Module):
             assert len(ref_features) == len(ref_boxes)
             # Compute the feature similarity
             ref_distance = torch.diag(self.cosine_distance(id_features, ref_features))
-            cost_feature = (self.cosine_distance(src_id_features, id_features) + ref_distance) / 2.0
+            # cost_feature = (self.cosine_distance(src_id_features, id_features) + ref_distance) / 2.0
+            cost_feature = torch.sqrt(ref_distance * self.cosine_distance(src_id_features, id_features))
+            # cost_feature = self.cosine_distance(src_id_features, id_features)
+
+            # cost_feature = torch.diag(self.cosine_distance(src_id_features, ref_features))
             # Compute the distance ** 2 between boxes 
             cost_distance = torch.cdist(src_boxes, pred_boxes, p=2)
-
+            
             # Final cost matrix
             C = self.cost_feat * cost_feature + (1 - self.cost_feat) * cost_distance
+            # C = (1 - self.cost_feat) * cost_distance
             C[out_prob<self.det_thr] = inf
             C = C.view(bs, num_queries, -1).cpu()
 

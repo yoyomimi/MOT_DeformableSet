@@ -166,7 +166,7 @@ def get_warp_matrix(src, dst, warp_mode = cv2.MOTION_HOMOGRAPHY, eps = 1e-5,
 
 def read_img(img_path):
     image = Image.open(img_path).convert('RGB')
-    image, _ = resize(image, None, 608, max_size=1088)
+    image, _ = resize(image, None, 384, max_size=1280)
     image = F_trans.to_tensor(image)
     image = F_trans.normalize(image, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     return image
@@ -330,8 +330,9 @@ def eval_seq(cfg, device, img_path_list, model, postprocessors, data_type,
         for t in online_targets:
             tlwh = t._tlwh
             tid = t.track_id
-            vertical = tlwh[2] / tlwh[3] > 1.6
-            if tlwh[2] * tlwh[3] > min_box_area and not vertical:
+            # vertical = tlwh[2] / tlwh[3] > 1.6
+            # if tlwh[2] * tlwh[3] > min_box_area and not vertical:
+            if tlwh[2] * tlwh[3] > min_box_area:
                 online_tlwhs.append(tlwh)
                 online_ids.append(tid)
                 #online_scores.append(t.score)
@@ -430,7 +431,7 @@ def main(data_root='/data/MOT16/train', seqs=('MOT16-05',), exp_name='demo',
         if not osp.exists(result_root):
             os.makedirs(result_root)
 
-    data_type = 'mot'
+    data_type = 'kitti'
     # run tracking
     accs = []
     n_frame = 0
@@ -445,11 +446,10 @@ def main(data_root='/data/MOT16/train', seqs=('MOT16-05',), exp_name='demo',
             if output_dir is not None and not osp.exists(output_dir):
                 os.makedirs(output_dir)
         device = torch.device(cfg.DEVICE)
-        img_path_list = sorted(os.listdir(osp.join(data_root, seq, 'img1')))
-        img_path_list = [osp.join(data_root, seq, 'img1', path) for path in img_path_list]
+        img_path_list = sorted(os.listdir(osp.join(data_root, seq)))
+        img_path_list = [osp.join(data_root, seq, path) for path in img_path_list]
         
-        meta_info = open(osp.join(data_root, seq, 'seqinfo.ini')).read()
-        frame_rate = int(meta_info[meta_info.find('frameRate') + 10:meta_info.find('\nseqLength')])
+        frame_rate = 30
         nf, ta, tc = eval_seq(cfg, device, img_path_list, model, postprocessors, data_type, result_filename, save_dir=output_dir, show_image=show_image, frame_rate=frame_rate, logger=logger)
         n_frame += nf
         timer_avgs.append(ta)
@@ -488,6 +488,61 @@ def main(data_root='/data/MOT16/train', seqs=('MOT16-05',), exp_name='demo',
 
 if __name__ == '__main__':
     data_dir = '/mnt/lustre/chenmingfei/data/MOT_data/'
+    # # test KITTI
+    # seqs_str = '''0000
+    #               0001
+    #               0002
+    #               0003
+    #               0004
+    #               0005
+    #               0006
+    #               0007
+    #               0008
+    #               0009
+    #               0010
+    #               0011
+    #               0012
+    #               0013
+    #               0014
+    #               0015
+    #               0016
+    #               0017
+    #               0018
+    #               0019
+    #               0020
+    #               0021
+    #               0022
+    #               0023
+    #               0024
+    #               0025
+    #               0026
+    #               0027
+    #               0028'''
+    # data_root = os.path.join(data_dir, 'KITTI/test')
+
+    # val KITTI
+    seqs_str = '''0000
+                  0001
+                  0002
+                  0003
+                  0004
+                  0005
+                  0006
+                  0007
+                  0008
+                  0009
+                  0010
+                  0011
+                  0012
+                  0013
+                  0014
+                  0015
+                  0016
+                  0017
+                  0018
+                  0019
+                  0020'''
+    data_root = os.path.join(data_dir, 'KITTI/image_02')
     # val mot16
     # seqs_str = '''MOT16-02
     #               MOT16-04
@@ -498,14 +553,14 @@ if __name__ == '__main__':
     #               MOT16-13'''
     # data_root = os.path.join(data_dir, 'MOT16/train')
     # # test mot16
-    seqs_str = '''MOT16-01
-                  MOT16-03
-                  MOT16-06
-                  MOT16-07
-                  MOT16-08
-                  MOT16-12
-                  MOT16-14'''
-    data_root = os.path.join(data_dir, 'MOT16/test')
+    # seqs_str = '''MOT16-01
+    #               MOT16-03
+    #               MOT16-06
+    #               MOT16-07
+    #               MOT16-08
+    #               MOT16-12
+    #               MOT16-14'''
+    # data_root = os.path.join(data_dir, 'MOT16/test')
     # # test mot15
     # seqs_str = '''ADL-Rundle-1
     #               ADL-Rundle-3

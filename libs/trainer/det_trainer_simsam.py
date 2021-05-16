@@ -78,8 +78,8 @@ class TrackTrainer(BaseTrainer):
         ### Modified ###
         indices = self.criterion.out_indices
         out_id_features = self.model.module.out_id_features.detach()
+        out_id_preds = self.model.module.out_id_preds.detach()
         out_prev_boxes = self.model.module.out_pred_boxes.detach()
-        out_prob = self.model.module.out_prob.detach()
         # no detach
         prev_memory = self.model.module.out_memory.detach()
         assert len(indices) == len(targets)
@@ -92,28 +92,18 @@ class TrackTrainer(BaseTrainer):
             gt_ref_boxes = targets[i]['ref_boxes']
             gt_ref_ids = targets[i]['gt_ref_ids']
             id_features = out_id_features[i]
+            id_preds = out_id_preds[i]
             prev_boxes = out_prev_boxes[i]
-            prev_scores = out_prob[i]
-            assert len(prev_scores) == len(prev_boxes)
             if len(matched_idx) == 0:
                 valid_idx = []
             else:
                 valid_idx = [torch.where(tgt==idx)[0][0] for idx in matched_idx]
-            prev_features = id_features[src[torch.as_tensor(valid_idx).reshape(-1, ).long()]]
+            prev_features = id_features[src[torch.as_tensor(valid_idx).reshape(-1, )]]
+            prev_id_preds = id_preds[src[torch.as_tensor(valid_idx).reshape(-1, )]]
             ref_boxes = prev_boxes[src[torch.as_tensor(valid_idx).reshape(-1, ).long()]]
-            ref_scores = prev_scores[src[torch.as_tensor(valid_idx).reshape(-1, ).long()]]
-
-            # valid_idx = torch.where(ref_scores>=0.4)[0]
-            # ref_boxes = ref_boxes[valid_idx]
-            # matched_idx = matched_idx[valid_idx]
-            # prev_features = prev_features[valid_idx]
-            # gt_ref_boxes = gt_ref_boxes[valid_idx]
-            # gt_ref_ids = gt_ref_ids[valid_idx]
-            # idx_map = idx_map[valid_idx]
-
             references.append(dict(ref_features=prev_features, ref_boxes=ref_boxes, idx_map=idx_map,
                                    input_size=input_size, gt_ref_boxes=gt_ref_boxes, prev_memory=prev_memory,
-                                   gt_ref_ids=gt_ref_ids))
+                                   gt_ref_ids=gt_ref_ids, prev_id_preds=prev_id_preds))
         if len(references) == 0:
             references = None
         outputs = self.model(next_imgs, references)
@@ -130,7 +120,7 @@ class TrackTrainer(BaseTrainer):
         metric_logger = utils.MetricLogger(delimiter="  ")
         metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
         metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
-        metric_logger.add_meter('id_class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
+        # metric_logger.add_meter('id_class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
         header = 'Epoch: [{}]'.format(self.epoch)
         print_freq = self.cfg.TRAIN.PRINT_FREQ
 
@@ -170,7 +160,7 @@ class TrackTrainer(BaseTrainer):
 
             metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled)
             metric_logger.update(class_error=loss_dict_reduced['class_error'])
-            metric_logger.update(id_class_error=loss_dict_reduced['id_class_error'])
+            # metric_logger.update(id_class_error=loss_dict_reduced['id_class_error'])
             metric_logger.update(lr=self.optimizer.param_groups[0]["lr"])
 
         # gather the stats from all processes

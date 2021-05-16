@@ -10,7 +10,7 @@ import mmcv
 import torch
 from torch.utils.data import Dataset
 
-class MatchCustomTaskDataset(Dataset):
+class MatchCHDataset(Dataset):
 
     def __init__(self,
                  anno_root,
@@ -30,53 +30,30 @@ class MatchCustomTaskDataset(Dataset):
         self.annotations = annotations
         self.ids = []
         self.max_objs = max_obj
-        id_base = 1
-        max_id = 0
-        min_id = 1000000
-        pre_mot_video = None
-        pre_mot_frame = None
+        id_base = 0
+        cur_id = 0
         for i, anno in enumerate(self.annotations):
-            if i > 0 and i in count:
-                id_base = max_id + 1
             anno['ann']['extra_anns'] = np.array(anno['ann']['extra_anns']).reshape(-1, )
-            if(len(anno['ann']['extra_anns'])>0):
-                anno['ann']['extra_anns'][anno['ann']['extra_anns']>-1] += id_base - 1
-                max_id = max(max_id, max(anno['ann']['extra_anns']))
-                min_id = min(min_id, min(anno['ann']['extra_anns']))
-
-            # get next_anno
-            anno['next_ann_id'] = -1
+            if len(anno['ann']['extra_anns']) == 0:
+                anno['ann']['extra_anns'] = -np.ones(len(anno['ann']['bboxes'])).reshape(-1, )
+            for j, single_id in enumerate(anno['ann']['extra_anns']):
+                if cur_id >= 60000:
+                    anno['ann']['extra_anns'][j] = -1
+                else:
+                    anno['ann']['extra_anns'][j] = cur_id
+                    cur_id += 1
+                # anno['ann']['extra_anns'][j] = cur_id
+                # cur_id += 1
             if istrain is False:
-                flag_bad = 0
                 self.ids.append(i)
             else:
-                flag_bad = 1
+                flag_bad = 0
                 boxes = anno['ann']['bboxes']
                 labels = anno['ann']['labels']
-                if (len(boxes) > 0 and len(boxes) <= max_obj and 
+                if (len(boxes) >= 0 and len(boxes) <= max_obj and 
                      labels.sum()==len(labels)):
-                    flag_bad = 0
                     self.ids.append(i)
-                    
-            # if flag_bad == 0 and anno['filename'][:3] == 'MOT':
-            if flag_bad == 0:
-                video_name = anno['filename'].split('/')[2]
-                frame = int(anno['filename'].split('/')[-1].split('.')[0])
-                if pre_mot_video is None or pre_mot_frame is None:
-                    pre_mot_video = video_name
-                    pre_mot_frame = frame
-                else:
-                    if video_name == pre_mot_video and frame == pre_mot_frame + 1 and i > 0:
-                        self.annotations[i-1]['next_ann_id'] = i
-                        pre_mot_video = video_name
-                        pre_mot_frame = frame
-                    else:
-                        pre_mot_frame = None
-                        pre_mot_video = None
-        # print(cur_id)
-        id_base = max_id
-        print(id_base, min_id)
-        
+        print(cur_id)
     def __len__(self):
         return len(self.ids)
 
@@ -89,7 +66,7 @@ class MatchCustomTaskDataset(Dataset):
             index (int): image index
         """
         # affine the same pic
-        affine_flag = (self.annotations[self.ids[index]]['next_ann_id']==-1)
+        affine_flag = True
         anno = self.annotations[self.ids[index]]
         filename = anno['filename']
         img_path = os.path.join(self.img_root, filename)
@@ -224,7 +201,7 @@ class MatchCustomTaskDataset(Dataset):
             gt_ref_ids=gt_ref_ids
         )
         return img, next_img, out_target, filename, len(match_mask)
-
+    
     def __getitem__(self, index):
         valid = 0
         while(valid == 0):

@@ -63,7 +63,7 @@ def sigmoid_focal_loss(inputs, targets, num_boxes=None, reduction='mean', alpha:
 
 class DeformableMatchTrack(nn.Module):
     def __init__(self, backbone, transformer, num_classes, num_queries, num_feature_levels,
-                 emb_dim=64, dataset_nids=897, aux_loss=True, with_box_refine=False, two_stage=False, num_match_decoder_layers=6):
+                 emb_dim=64, dataset_nids=757, aux_loss=True, with_box_refine=False, two_stage=False, num_match_decoder_layers=6):
         # ch: 355567 14687 60000 776 2324 897 757
         """ Initializes the model.
         Parameters:
@@ -580,7 +580,7 @@ class PostProcess(nn.Module):
     def __init__(self):
         super().__init__()
         from libs.models.matcher import MatchTrackMatcher
-        self.refer_matcher = MatchTrackMatcher(det_thr=0.4, cost_limit=0.8)
+        self.refer_matcher = MatchTrackMatcher(det_thr=0.4, cost_limit=1.0)
 
     @torch.no_grad()
     def forward(self, outputs, filename, target_sizes, references=None):

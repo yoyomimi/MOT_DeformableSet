@@ -5,6 +5,7 @@ import os
 import os.path as osp
 import time
 
+import mmcv
 import torch
 import torch.optim as optim
 from torch.optim.lr_scheduler import _LRScheduler
@@ -119,7 +120,12 @@ def load_checkpoint(cfg, model, optimizer, lr_scheduler, device, module_name='mo
     resume = cfg.TRAIN.RESUME
     if resume_path:
         if osp.exists(resume_path):
-            checkpoint = torch.load(resume_path, map_location='cpu')
+            if resume_path.split('.')[-1] == 'pkl':
+                checkpoint={
+                    'model': mmcv.load(resume_path)
+                }
+            else:
+                checkpoint = torch.load(resume_path, map_location='cpu')
             # resume
             if 'state_dict' in checkpoint:
                 model.module.load_state_dict(checkpoint['state_dict'], strict=False)

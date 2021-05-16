@@ -79,7 +79,7 @@ def get_ip(ip_addr):
     for i in range(4):
         if ip_list[i][0] == '[':
             ip_list[i] = ip_list[i][1:].split(',')[0]
-    return f'tcp://{ip_list[0]}.{ip_list[1]}.{ip_list[2]}.{ip_list[3]}:12245'
+    return f'tcp://{ip_list[0]}.{ip_list[1]}.{ip_list[2]}.{ip_list[3]}:31246'
 
 def get_warp_matrix(src, dst, warp_mode = cv2.MOTION_HOMOGRAPHY, eps = 1e-5,
         max_iter = 100, scale = None, align = False):
@@ -171,7 +171,7 @@ def read_img(img_path):
     image = F_trans.normalize(image, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     return image
 
-def process_img(img_path, model, postprocessors, device, threshold=0.4, references=None):
+def process_img(img_path, model, postprocessors, device, threshold=0.38, references=None):
     model.eval()
     ori_img = cv2.imread(img_path, cv2.IMREAD_COLOR)
     h, w = ori_img.shape[:2]
@@ -193,7 +193,7 @@ def process_img(img_path, model, postprocessors, device, threshold=0.4, referenc
     valid_id = torch.where(labels==1)[0]
     boxes_with_scores = torch.cat([boxes[valid_id].reshape(
         -1, 4), scores[valid_id].reshape(-1, 1)], dim=1)
-    # keep = hard_nms(boxes_with_scores, 0.9, return_pick=True)
+    # keep = hard_nms(boxes_with_scores, nms_threshold, return_pick=True)
     dets_np = boxes_with_scores[..., :5].reshape(
         -1, 5).data.cpu().numpy()
     id_features_np = res['id_features'][valid_inds][valid_id].reshape(-1,
@@ -282,9 +282,7 @@ def eval_seq(cfg, device, img_path_list, model, postprocessors, data_type,
         scale = torch.as_tensor([ori_img.shape[1], ori_img.shape[0], ori_img.shape[1], ori_img.shape[0]])
         offset_np = None
         if references is not None:
-            scale_6d = torch.as_tensor([ori_img.shape[1], ori_img.shape[0], ori_img.shape[1], ori_img.shape[
-                0], ori_img.shape[1], ori_img.shape[0]])
-            ori_ref_boxes = (references[0]['ref_boxes'].data.cpu() * scale_6d)[..., :2]
+            ori_ref_boxes = (references[0]['ref_boxes'].data.cpu() * scale)[..., :2]
             offset_np = np.hstack([ori_ref_boxes.numpy(), ref_coords])
 
         # if prev_img is not None:
@@ -305,21 +303,6 @@ def eval_seq(cfg, device, img_path_list, model, postprocessors, data_type,
 
         
         references[0]['ref_boxes'] /= scale.to(references[0]['ref_boxes'].device)
-        # references[0]['ref_boxes'] = torch.cat([references[0]['ref_boxes'][..., :2], 0.5*references[0]['ref_boxes'][
-        #     ..., 2:], 0.5*references[0]['ref_boxes'][..., 2:]], dim=-1)
-
-        wh_boxes = references[0]['ref_boxes'].clone()
-        cx = wh_boxes[..., 0].clamp(min=0, max=1.)
-        cy = wh_boxes[..., 1].clamp(min=0, max=1.)
-        left_xy = wh_boxes[..., :2] - 0.5 * wh_boxes[..., 2:]
-        right_xy = wh_boxes[..., :2] + 0.5 * wh_boxes[..., 2:]
-        lw = (cx - left_xy[..., 0]).unsqueeze(-1)
-        lh = (cy - left_xy[..., 1]).unsqueeze(-1)
-        rw = (right_xy[..., 0] - cx).unsqueeze(-1)
-        rb = (right_xy[..., 1] - cy).unsqueeze(-1)
-        cx = cx.unsqueeze(-1)
-        cy = cy.unsqueeze(-1)
-        references[0]['ref_boxes'] = torch.cat([cx, cy, lw, lh, rw, rb], dim=-1)
         references[0]['prev_memory'] = prev_memory
         references[0]['input_size'] = torch.as_tensor([ori_img.shape[1], ori_img.shape[0]]).reshape(1, 2).long()
         references = [{k: v.to(device) for k, v in r.items()} for r in references]
@@ -498,14 +481,14 @@ if __name__ == '__main__':
     #               MOT16-13'''
     # data_root = os.path.join(data_dir, 'MOT16/train')
     # # test mot16
-    seqs_str = '''MOT16-01
-                  MOT16-03
-                  MOT16-06
-                  MOT16-07
-                  MOT16-08
-                  MOT16-12
-                  MOT16-14'''
-    data_root = os.path.join(data_dir, 'MOT16/test')
+    # seqs_str = '''MOT16-01
+    #               MOT16-03
+    #               MOT16-06
+    #               MOT16-07
+    #               MOT16-08
+    #               MOT16-12
+    #               MOT16-14'''
+    # data_root = os.path.join(data_dir, 'MOT16/test')
     # # test mot15
     # seqs_str = '''ADL-Rundle-1
     #               ADL-Rundle-3
@@ -520,15 +503,14 @@ if __name__ == '__main__':
     #               Venice-1'''
     # data_root = os.path.join(data_dir, 'MOT15/images/test')
     # # test mot17
-    # seqs_str = '''MOT17-01-SDP
-    #               MOT17-03-SDP
-    #               MOT17-06-SDP
-    #               MOT17-07-SDP
-    #               MOT17-08-SDP
-    #               MOT17-12-SDP
-    #               MOT17-14-SDP'''
-    # seqs_str = '''MOT17-01-SDP'''
-    # data_root = os.path.join(data_dir, 'MOT17/test')
+    seqs_str = '''MOT17-01-SDP
+                  MOT17-03-SDP
+                  MOT17-06-SDP
+                  MOT17-07-SDP
+                  MOT17-08-SDP
+                  MOT17-12-SDP
+                  MOT17-14-SDP'''
+    data_root = os.path.join(data_dir, 'MOT17/test')
     # val mot17
     # seqs_str = '''MOT17-02-SDP
     #               MOT17-04-SDP
@@ -537,7 +519,7 @@ if __name__ == '__main__':
     #               MOT17-10-SDP
     #               MOT17-11-SDP
     #               MOT17-13-SDP'''
-    # seqs_str = '''MOT17-02-SDP'''
+    # seqs_str = '''MOT17-13-SDP'''
     # data_root = os.path.join(data_dir, 'MOT17/train')
     # # val mot15
     # seqs_str = '''Venice-2
@@ -559,14 +541,14 @@ if __name__ == '__main__':
     #               MOT20-03
     #               MOT20-05
     #               '''
-    # data_root = os.path.join(data_dir, 'MOT20/train')
+    # data_root = os.path.join(data_dir, 'MOT20/images/train')
     # # test mot20
     # seqs_str = '''MOT20-04
     #               MOT20-06
     #               MOT20-07
     #               MOT20-08
     #               '''
-    # data_root = os.path.join(data_dir, 'MOT20/test')
+    # data_root = os.path.join(data_dir, 'MOT20/images/test')
 
     seqs = [seq.strip() for seq in seqs_str.split()]
 

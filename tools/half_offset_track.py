@@ -79,7 +79,7 @@ def get_ip(ip_addr):
     for i in range(4):
         if ip_list[i][0] == '[':
             ip_list[i] = ip_list[i][1:].split(',')[0]
-    return f'tcp://{ip_list[0]}.{ip_list[1]}.{ip_list[2]}.{ip_list[3]}:12245'
+    return f'tcp://{ip_list[0]}.{ip_list[1]}.{ip_list[2]}.{ip_list[3]}:21785'
 
 def get_warp_matrix(src, dst, warp_mode = cv2.MOTION_HOMOGRAPHY, eps = 1e-5,
         max_iter = 100, scale = None, align = False):
@@ -260,7 +260,7 @@ def write_results_score(filename, results, data_type, logger=None):
 
 def eval_seq(cfg, device, img_path_list, model, postprocessors, data_type,
              result_filename, save_dir=None, show_image=True,
-             min_box_area=100., frame_rate=30, use_cuda=True, logger=None):
+             min_box_area=100., frame_rate=30, use_cuda=True, logger=None, half_frame=None):
     if logger is not None and save_dir and not osp.exists(save_dir):
         os.makedirs(save_dir)
     # tracker = SimpleTracker(frame_rate=frame_rate)
@@ -271,6 +271,9 @@ def eval_seq(cfg, device, img_path_list, model, postprocessors, data_type,
     references = None
     prev_img = None
     for i, path in enumerate(img_path_list):
+        if half_frame is not None and (frame_id + 1 < half_frame):
+            frame_id += 1
+            continue
         #if i % 8 != 0:
             #continue
         if logger is not None and frame_id % 20 == 0:
@@ -293,6 +296,7 @@ def eval_seq(cfg, device, img_path_list, model, postprocessors, data_type,
         #     warp_matrix = None
         
         online_targets, references = tracker.update(dets, id_feature, ref_id_features, track_idx, logger)
+       
         
         # if prev_img is not None:
         #     warp_matrix = torch.as_tensor(warp_matrix).to(references[0]['ref_boxes'].device)
@@ -303,26 +307,26 @@ def eval_seq(cfg, device, img_path_list, model, postprocessors, data_type,
         #     Z = warp_matrix[..., 6] * x0 + warp_matrix[..., 7] * y0 + warp_matrix[..., 8]
         #     references[0]['ref_boxes'][..., :2] = torch.stack([X/Z, Y/Z], dim=-1).reshape(references[0]['ref_boxes'][..., :2].shape)
 
-        
-        references[0]['ref_boxes'] /= scale.to(references[0]['ref_boxes'].device)
-        # references[0]['ref_boxes'] = torch.cat([references[0]['ref_boxes'][..., :2], 0.5*references[0]['ref_boxes'][
-        #     ..., 2:], 0.5*references[0]['ref_boxes'][..., 2:]], dim=-1)
+        if references is not None:
+            references[0]['ref_boxes'] /= scale.to(references[0]['ref_boxes'].device)
+            # references[0]['ref_boxes'] = torch.cat([references[0]['ref_boxes'][..., :2], 0.5*references[0]['ref_boxes'][
+            #     ..., 2:], 0.5*references[0]['ref_boxes'][..., 2:]], dim=-1)
 
-        wh_boxes = references[0]['ref_boxes'].clone()
-        cx = wh_boxes[..., 0].clamp(min=0, max=1.)
-        cy = wh_boxes[..., 1].clamp(min=0, max=1.)
-        left_xy = wh_boxes[..., :2] - 0.5 * wh_boxes[..., 2:]
-        right_xy = wh_boxes[..., :2] + 0.5 * wh_boxes[..., 2:]
-        lw = (cx - left_xy[..., 0]).unsqueeze(-1)
-        lh = (cy - left_xy[..., 1]).unsqueeze(-1)
-        rw = (right_xy[..., 0] - cx).unsqueeze(-1)
-        rb = (right_xy[..., 1] - cy).unsqueeze(-1)
-        cx = cx.unsqueeze(-1)
-        cy = cy.unsqueeze(-1)
-        references[0]['ref_boxes'] = torch.cat([cx, cy, lw, lh, rw, rb], dim=-1)
-        references[0]['prev_memory'] = prev_memory
-        references[0]['input_size'] = torch.as_tensor([ori_img.shape[1], ori_img.shape[0]]).reshape(1, 2).long()
-        references = [{k: v.to(device) for k, v in r.items()} for r in references]
+            wh_boxes = references[0]['ref_boxes'].clone()
+            cx = wh_boxes[..., 0].clamp(min=0, max=1.)
+            cy = wh_boxes[..., 1].clamp(min=0, max=1.)
+            left_xy = wh_boxes[..., :2] - 0.5 * wh_boxes[..., 2:]
+            right_xy = wh_boxes[..., :2] + 0.5 * wh_boxes[..., 2:]
+            lw = (cx - left_xy[..., 0]).unsqueeze(-1)
+            lh = (cy - left_xy[..., 1]).unsqueeze(-1)
+            rw = (right_xy[..., 0] - cx).unsqueeze(-1)
+            rb = (right_xy[..., 1] - cy).unsqueeze(-1)
+            cx = cx.unsqueeze(-1)
+            cy = cy.unsqueeze(-1)
+            references[0]['ref_boxes'] = torch.cat([cx, cy, lw, lh, rw, rb], dim=-1)
+            references[0]['prev_memory'] = prev_memory
+            references[0]['input_size'] = torch.as_tensor([ori_img.shape[1], ori_img.shape[0]]).reshape(1, 2).long()
+            references = [{k: v.to(device) for k, v in r.items()} for r in references]
         prev_img = ori_img.copy()
         online_tlwhs = []
         online_ids = []
@@ -435,6 +439,15 @@ def main(data_root='/data/MOT16/train', seqs=('MOT16-05',), exp_name='demo',
     accs = []
     n_frame = 0
     timer_avgs, timer_calls = [], []
+    half_frames = {
+        'MOT17-02-SDP': 301,
+        'MOT17-04-SDP': 526,
+        'MOT17-05-SDP': 419,
+        'MOT17-09-SDP': 263,
+        'MOT17-10-SDP': 328,
+        'MOT17-11-SDP': 451,
+        'MOT17-13-SDP': 449,
+    }
     for seq in seqs:
         output_dir = None
         result_filename = None
@@ -450,7 +463,12 @@ def main(data_root='/data/MOT16/train', seqs=('MOT16-05',), exp_name='demo',
         
         meta_info = open(osp.join(data_root, seq, 'seqinfo.ini')).read()
         frame_rate = int(meta_info[meta_info.find('frameRate') + 10:meta_info.find('\nseqLength')])
-        nf, ta, tc = eval_seq(cfg, device, img_path_list, model, postprocessors, data_type, result_filename, save_dir=output_dir, show_image=show_image, frame_rate=frame_rate, logger=logger)
+        if seq in half_frames.keys():
+            half_frame = half_frames[seq]
+        else:
+            half_frame = None
+        nf, ta, tc = eval_seq(cfg, device, img_path_list, model, postprocessors, data_type, result_filename, save_dir=output_dir,
+            show_image=show_image, frame_rate=frame_rate, logger=logger, half_frame=half_frame)
         n_frame += nf
         timer_avgs.append(ta)
         timer_calls.append(tc)
@@ -458,7 +476,8 @@ def main(data_root='/data/MOT16/train', seqs=('MOT16-05',), exp_name='demo',
         # eval
         if logger is not None:
             logger.info('Evaluate seq: {}'.format(seq))
-            evaluator = Evaluator(data_root, seq, data_type)
+            half_seq = seq[:9] + 'FRCNN'
+            evaluator = Evaluator(data_root, half_seq, data_type)
             accs.append(evaluator.eval_file(result_filename))
             if save_videos and output_dir is not None:
                 output_video_path = osp.join(output_dir, '{}.mp4'.format(seq))
@@ -498,14 +517,14 @@ if __name__ == '__main__':
     #               MOT16-13'''
     # data_root = os.path.join(data_dir, 'MOT16/train')
     # # test mot16
-    seqs_str = '''MOT16-01
-                  MOT16-03
-                  MOT16-06
-                  MOT16-07
-                  MOT16-08
-                  MOT16-12
-                  MOT16-14'''
-    data_root = os.path.join(data_dir, 'MOT16/test')
+    # seqs_str = '''MOT16-01
+    #               MOT16-03
+    #               MOT16-06
+    #               MOT16-07
+    #               MOT16-08
+    #               MOT16-12
+    #               MOT16-14'''
+    # data_root = os.path.join(data_dir, 'MOT16/test')
     # # test mot15
     # seqs_str = '''ADL-Rundle-1
     #               ADL-Rundle-3
@@ -530,15 +549,15 @@ if __name__ == '__main__':
     # seqs_str = '''MOT17-01-SDP'''
     # data_root = os.path.join(data_dir, 'MOT17/test')
     # val mot17
-    # seqs_str = '''MOT17-02-SDP
-    #               MOT17-04-SDP
-    #               MOT17-05-SDP
-    #               MOT17-09-SDP
-    #               MOT17-10-SDP
-    #               MOT17-11-SDP
-    #               MOT17-13-SDP'''
-    # seqs_str = '''MOT17-02-SDP'''
-    # data_root = os.path.join(data_dir, 'MOT17/train')
+    seqs_str = '''MOT17-02-SDP
+                  MOT17-04-SDP
+                  MOT17-05-SDP
+                  MOT17-09-SDP
+                  MOT17-10-SDP
+                  MOT17-11-SDP
+                  MOT17-13-SDP'''
+    # seqs_str = '''MOT17-13-SDP'''
+    data_root = os.path.join(data_dir, 'MOT17/train')
     # # val mot15
     # seqs_str = '''Venice-2
     #               KITTI-13

@@ -281,8 +281,17 @@ class Normalize(object):
                 h, w = im.shape[-2:]
                 if "boxes" in out_t:
                     boxes = out_t["boxes"]
-                    boxes = box_xyxy_to_cxcywh(boxes)
-                    boxes = boxes / torch.tensor([w, h, w, h], dtype=torch.float32)
+                    wh_boxes = box_xyxy_to_cxcywh(boxes)
+                    cx = wh_boxes[..., 0].clamp(min=0, max=w)
+                    cy = wh_boxes[..., 1].clamp(min=0, max=h)
+                    lw = (cx - boxes[..., 0]).unsqueeze(-1)
+                    lh = (cy - boxes[..., 1]).unsqueeze(-1)
+                    rw = (boxes[..., 2] - cx).unsqueeze(-1)
+                    rb = (boxes[..., 3] - cy).unsqueeze(-1)
+                    cx = cx.unsqueeze(-1)
+                    cy = cy.unsqueeze(-1)
+                    boxes = torch.cat([cx, cy, lw, lh, rw, rb], dim=-1)
+                    boxes = boxes / torch.tensor([w, h, w, h, w, h], dtype=torch.float32)
                     out_t["boxes"] = boxes
                     out_target.append(out_t)
             return out_image, out_target
@@ -294,8 +303,17 @@ class Normalize(object):
             h, w = image.shape[-2:]
             if "boxes" in target:
                 boxes = target["boxes"]
-                boxes = box_xyxy_to_cxcywh(boxes)
-                boxes = boxes / torch.tensor([w, h, w, h], dtype=torch.float32)
+                wh_boxes = box_xyxy_to_cxcywh(boxes)
+                cx = wh_boxes[..., 0].clamp(min=0, max=w)
+                cy = wh_boxes[..., 1].clamp(min=0, max=h)
+                lw = (cx - boxes[..., 0]).unsqueeze(-1)
+                lh = (cy - boxes[..., 1]).unsqueeze(-1)
+                rw = (boxes[..., 2] - cx).unsqueeze(-1)
+                rb = (boxes[..., 3] - cy).unsqueeze(-1)
+                cx = cx.unsqueeze(-1)
+                cy = cy.unsqueeze(-1)
+                boxes = torch.cat([cx, cy, lw, lh, rw, rb], dim=-1)
+                boxes = boxes / torch.tensor([w, h, w, h, w, h], dtype=torch.float32)
                 target["boxes"] = boxes
             return image, target
 

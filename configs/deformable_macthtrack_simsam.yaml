@@ -1,14 +1,12 @@
-OUTPUT_ROOT: matchtrack_fullmot17_fix_posnorm_bugs_norefidx_layer6_again2
+OUTPUT_ROOT: matchtrack_simsam_mot_test
 DIST_BACKEND: 'nccl'
-WORKERS: 0
+WORKERS: 4
 DEVICE: cuda
 SEED: 42
 DATASET:
   FILE: match_customtask
   NAME: MatchCustomTaskDataset
-  ROOT: 'data/mot17_pkl/'
-  # ROOT: 'data/new_mot_pkl/'
-  # ROOT: 'data/halfmot_pkl/'
+  ROOT: '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/data/mot17_pkl/'
   MEAN: [0.485, 0.456, 0.406]
   STD: [0.229, 0.224, 0.225]
   IMG_NUM_PER_GPU: 1
@@ -17,11 +15,9 @@ DATASET:
   SCALES: [608,]
   PREFIX: '/mnt/lustre/chenmingfei/data/MOT_data/'
 MODEL:
-  FILE: deformable_matchtrack
+  FILE: deformable_matchtrack_simsam
   NAME: DeformableMatchTrack
-  # RESUME_PATH: 'data/matchtrack_15_ch_6w_remove_for_match_DeformableMatchTrack_epoch030_checkpoint.pth'
-  RESUME_PATH: 'output/matchtrack_15_ch_6w_fix_posnorm_bugs_norefidx_layer6_DeformableMatchTrack_epoch030_checkpoint.pth'
-  # RESUME_PATH: 'output/matchtrack_ch38_mot17_crop_invalid_DeformableMatchTrack_epoch009_checkpoint.pth'
+  RESUME_PATH: 'output/matchtrack_simsam_ch_DeformableMatchTrack_epoch030_checkpoint.pth'
 BACKBONE:
   NAME: resnet50
   DIALATION: False
@@ -55,7 +51,7 @@ LOSS:
   GIOU_LOSS_COEF: 2
   FOCAL_ALPHA: 0.25
 TRAINER:
-  FILE: det_trainer
+  FILE: det_trainer_simsam
   NAME: TrackTrainer
 TRAIN:
   LR: 0.0001
@@ -68,7 +64,7 @@ TRAIN:
   LR_DROP: 15 #40
   MAX_EPOCH: 25 #50
   PRINT_FREQ: 20
-  SAVE_INTERVAL: 5 #5
+  SAVE_INTERVAL: 1 #5
   SAVE_EVERY_CHECKPOINT: True
   VAL_WHEN_TRAIN: False
   CLIP_MAX_NORM: 0.1

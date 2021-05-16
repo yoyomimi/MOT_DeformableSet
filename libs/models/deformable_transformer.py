@@ -161,13 +161,13 @@ class DeformableTransformer(nn.Module):
 
             # hack implementation for two-stage Deformable DETR
             enc_outputs_class = self.decoder.det_class_embed[self.decoder.num_layers](output_memory)
-            enc_outputs_coord_unact = self.decoder.bbox_embed[self.decoder.num_layers](output_memory) + output_proposals
+            enc_outputs_coord_unact = self.decoder.det_bbox_embed[self.decoder.num_layers](output_memory) + output_proposals
             ###### modified ##########
             # enc_outputs_id_embeds = self.decoder.id_embed[self.decoder.num_layers](output_memory)
             ##########################
             topk = self.two_stage_num_proposals
             topk_proposals = torch.topk(enc_outputs_class[..., 0], topk, dim=1)[1]
-            topk_coords_unact = torch.gather(enc_outputs_coord_unact, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, 4))
+            topk_coords_unact = torch.gather(enc_outputs_coord_unact, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, enc_outputs_coord_unact.shape[-1]))
             topk_coords_unact = topk_coords_unact.detach()
             reference_points = topk_coords_unact.sigmoid()
             # topk_enc_id_embeds = torch.gather(enc_outputs_id_embeds, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, enc_outputs_id_embeds.shape[-1]))
@@ -212,7 +212,7 @@ class DeformableMatchTransformer(nn.Module):
                  num_encoder_layers=6, num_decoder_layers=6, dim_feedforward=1024, dropout=0.1,
                  activation="relu", return_intermediate_dec=False,
                  num_feature_levels=4, dec_n_points=4,  enc_n_points=4,
-                 two_stage=False, two_stage_num_proposals=300, num_match_decoder_layers=3):
+                 two_stage=False, two_stage_num_proposals=300, num_match_decoder_layers=6):
         super().__init__()
 
         self.d_model = d_model
@@ -242,8 +242,12 @@ class DeformableMatchTransformer(nn.Module):
             self.enc_output_norm = nn.LayerNorm(d_model)
             self.pos_trans = nn.Linear(d_model * 2, d_model * 2)
             self.pos_trans_norm = nn.LayerNorm(d_model * 2)
+            self.match_pos_trans = nn.Linear(d_model * 2, d_model * 2)
+            self.match_pos_trans_norm = nn.LayerNorm(d_model * 2)
         else:
             self.reference_points = nn.Linear(d_model, 2)
+            self.match_pos_trans = nn.Linear(d_model * 2, d_model * 2)
+            self.match_pos_trans_norm = nn.LayerNorm(d_model * 2)
 
         self._reset_parameters()
 
@@ -268,6 +272,10 @@ class DeformableMatchTransformer(nn.Module):
         dim_t = temperature ** (2 * (dim_t // 2) / num_pos_feats)
         # N, L, 4
         proposals = proposals.sigmoid() * scale
+        if proposals.shape[-1] == 6:
+            proposals_cxcy = proposals[..., :2]-proposals[..., 2:4] + 0.5 * (proposals[..., 2:4]+proposals[..., 4:])
+            proposals = torch.cat([proposals_cxcy, proposals[..., 2:4]+proposals[..., 4:]], dim=-1)
+            # proposals = torch.cat([proposals[..., :2], proposals[..., 2:4]+proposals[..., 4:]], dim=-1)
         # N, L, 4, 128
         pos = proposals[:, :, :, None] / dim_t
         # N, L, 4, 64, 2
@@ -351,13 +359,15 @@ class DeformableMatchTransformer(nn.Module):
 
             # hack implementation for two-stage Deformable DETR
             enc_outputs_class = self.decoder.det_class_embed[self.decoder.num_layers](output_memory)
-            enc_outputs_coord_unact = self.decoder.bbox_embed[self.decoder.num_layers](output_memory) + output_proposals
+            output_proposals[..., 2:] = 0.5 * output_proposals[..., 2:]
+            output_proposals = torch.cat([output_proposals, output_proposals[..., 2:]], dim=-1)
+            enc_outputs_coord_unact = self.decoder.det_bbox_embed[self.decoder.num_layers](output_memory) + output_proposals
             ###### modified ##########
             # enc_outputs_id_embeds = self.decoder.id_embed[self.decoder.num_layers](output_memory)
             ##########################
             topk = self.two_stage_num_proposals
             topk_proposals = torch.topk(enc_outputs_class[..., 0], topk, dim=1)[1]
-            topk_coords_unact = torch.gather(enc_outputs_coord_unact, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, 4))
+            topk_coords_unact = torch.gather(enc_outputs_coord_unact, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, enc_outputs_coord_unact.shape[-1]))
             topk_coords_unact = topk_coords_unact.detach()
             reference_points = topk_coords_unact.sigmoid()
             # topk_enc_id_embeds = torch.gather(enc_outputs_id_embeds, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, enc_outputs_id_embeds.shape[-1]))
@@ -399,15 +409,17 @@ class DeformableMatchTransformer(nn.Module):
             if len(ref_boxes) > 0:
                 joint_memory = memory + prev_memory
                 prev_points = ref_boxes[..., :2].unsqueeze(0)
-                match_pos_trans_out = self.pos_trans_norm(self.pos_trans(self.get_proposal_pos_embed(
+                match_pos_trans_out = self.match_pos_trans_norm(self.match_pos_trans(self.get_proposal_pos_embed(
                     inverse_sigmoid(ref_boxes).unsqueeze(0))))
+                # match_pos_trans_out = self.pos_trans_norm(self.pos_trans(self.get_proposal_pos_embed(
+                #     inverse_sigmoid(ref_boxes).unsqueeze(0))))
                 match_query_embed, match_tgt = torch.split(match_pos_trans_out, c, dim=2)
                 match_hs, match_inter_references = self.match_decoder(match_tgt, prev_points, joint_memory, spatial_shapes,
                     level_start_index, valid_ratios, match_query_embed, mask_flatten)
         
         if self.two_stage:
             return hs, init_reference_out, inter_references_out, enc_outputs_class, enc_outputs_coord_unact, ref_indices, memory, match_hs, match_inter_references
-        return hs, init_reference_out, inter_references_out, None, None, None, None, None, None
+        return hs, init_reference_out, inter_references_out, None, None, None, memory, match_hs, match_inter_references
 
 
 
@@ -543,7 +555,7 @@ class DeformableTransformerDecoder(nn.Module):
         self.num_layers = num_layers
         self.return_intermediate = return_intermediate
         # hack implementation for iterative bounding box refinement and two-stage Deformable DETR
-        self.bbox_embed = None
+        self.det_bbox_embed = None
         self.det_class_embed = None
         self.id_embed = None
 
@@ -554,7 +566,10 @@ class DeformableTransformerDecoder(nn.Module):
         intermediate = []
         intermediate_reference_points = []
         for lid, layer in enumerate(self.layers):
-            if reference_points.shape[-1] == 4:
+            if reference_points.shape[-1] == 6:
+                reference_points_input = reference_points[:, :, None] \
+                                         * torch.cat([src_valid_ratios, src_valid_ratios, src_valid_ratios], -1)[:, None]
+            elif reference_points.shape[-1] == 4:
                 reference_points_input = reference_points[:, :, None] \
                                          * torch.cat([src_valid_ratios, src_valid_ratios], -1)[:, None]
             else:
@@ -563,9 +578,9 @@ class DeformableTransformerDecoder(nn.Module):
             output = layer(output, query_pos, reference_points_input, src, src_spatial_shapes, src_level_start_index, src_padding_mask)
 
             # hack implementation for iterative bounding box refinement
-            if self.bbox_embed is not None:
-                tmp = self.bbox_embed[lid](output)
-                if reference_points.shape[-1] == 4:
+            if self.det_bbox_embed is not None:
+                tmp = self.det_bbox_embed[lid](output)
+                if reference_points.shape[-1] > 2:
                     new_reference_points = tmp + inverse_sigmoid(reference_points)
                     new_reference_points = new_reference_points.sigmoid()
                 else:

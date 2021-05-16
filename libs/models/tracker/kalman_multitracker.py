@@ -22,11 +22,13 @@ class STrack(BaseTrack):
         self.kalman_filter = None
         self.mean, self.covariance = None, None
         self.is_activated = False
+        # self.is_activated = True
 
         self.score = score
         self.tracklet_len = 0
 
         self.smooth_feat = None
+        # self.confs = deque([], maxlen=buffer_size)
         self.update_features(temp_feat)
         self.features = deque([], maxlen=buffer_size)
         self.alpha = 0.9
@@ -37,13 +39,25 @@ class STrack(BaseTrack):
     def update_features(self, feat, ref_feat=None):
         if ref_feat is not None:
             feat = ref_feat
-        # feat /= np.linalg.norm(feat)
         self.curr_feat = feat
+        # OF
+        # if self.smooth_feat is None:
+        #     self.smooth_feat = feat
+        # else:
+        #     pre_confs = np.array(list(self.confs)).reshape(-1, 1)
+        #     pre_feat = np.array(list(self.features)).reshape(len(pre_confs), -1)
+        #     weight = pre_confs / sum(pre_confs)
+        #     avg_pre_feat = np.sum(weight * pre_feat, axis=0)
+        #     # print(avg_pre_feat.shape)
+        #     self.smooth_feat = self.score * feat + (1 - self.score) * avg_pre_feat
+        #
+
         if self.smooth_feat is None:
             self.smooth_feat = feat
         else:
             self.smooth_feat = self.alpha * self.smooth_feat + (1 - self.alpha) * feat
-        self.features.append(feat)
+        self.features.append(self.curr_feat)
+        # self.confs.append(self.score)
 
     def predict(self):
         mean_state = self.mean.copy()
@@ -84,6 +98,7 @@ class STrack(BaseTrack):
             self.mean, self.covariance, self.tlwh_to_xyah(new_track.tlwh)
         )
         self._tlwh = new_track.tlwh
+        # self.score = new_track.score
         self.update_features(new_track.curr_feat, ref_feat)
         self.tracklet_len = 0
         self.state = TrackState.Tracked
@@ -210,6 +225,7 @@ class SimpleKalmanTracker(object):
                 continue
             track = self.strack_pool[itracked]
             ref_feat = ref_id_features[itracked]
+            # ref_feat = None
             track_valid[itracked] = 0
             det = detections[idet]
             if track.state == TrackState.Tracked:
@@ -231,6 +247,8 @@ class SimpleKalmanTracker(object):
         ''' Step 3: Second association, with IOU'''
         dists = matching.iou_distance(r_tracked_stracks, detections)
         matches, u_track, u_detection = matching.linear_assignment(dists, thresh=0.5)
+        # matches, u_track, u_detection = matching.linear_assignment(dists, thresh=-0.1)
+        # assert len(matches) == 0
 
         for itracked, idet in matches:
             track = r_tracked_stracks[itracked]
@@ -249,6 +267,7 @@ class SimpleKalmanTracker(object):
                 lost_stracks.append(track)
 
         '''Deal with unconfirmed tracks, usually tracks with only one beginning frame'''
+        # assert len(self.unconfirmed) == 0
         detections = [detections[i] for i in u_detection]
         dists = matching.iou_distance(self.unconfirmed, detections)
         matches, u_unconfirmed, u_detection = matching.linear_assignment(dists, thresh=0.7)
@@ -294,14 +313,17 @@ class SimpleKalmanTracker(object):
                 tracked_stracks.append(track)
         self.strack_pool = joint_stracks(tracked_stracks, self.lost_stracks)
         # TODO return additional references
+        # self.strack_pool = tracked_stracks
         references = None
-        id_features = torch.cat([torch.as_tensor(track.smooth_feat).reshape(1, -1) for track in self.strack_pool])
-        ref_boxes = torch.cat([torch.as_tensor(track.tlwh.reshape(1, -1)) for track in self.strack_pool])
-        ref_boxes[..., :2] += 0.5 * ref_boxes[..., 2:]
-        idx_map = torch.range(0, len(ref_boxes)-1)
-        references = [
-            dict(ref_features=id_features.float(), ref_boxes=ref_boxes.float(), idx_map=idx_map)
-        ]
+        if len(self.strack_pool) > 0:
+            id_features = torch.cat([torch.as_tensor(track.smooth_feat).reshape(1, -1) for track in self.strack_pool])
+            ref_boxes = torch.cat([torch.as_tensor(track.tlwh.reshape(1, -1)) for track in self.strack_pool])
+            ref_boxes[..., :2] += 0.5 * ref_boxes[..., 2:]
+            idx_map = torch.range(0, len(ref_boxes)-1)
+            references = [
+                dict(ref_features=id_features.float(), ref_boxes=ref_boxes.float(), idx_map=idx_map)
+            ]
+        # self.strack_pool = joint_stracks(tracked_stracks, self.lost_stracks)
         if logger is not None:
             logger.debug('===========Frame {}=========='.format(self.frame_id))
             logger.debug('Activated: {}'.format([track.track_id for track in activated_starcks]))

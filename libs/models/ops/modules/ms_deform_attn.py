@@ -106,10 +106,17 @@ class MSDeformAttn(nn.Module):
         elif reference_points.shape[-1] == 4:
             sampling_locations = reference_points[:, :, None, :, None, :2] \
                                  + sampling_offsets / self.n_points * reference_points[:, :, None, :, None, 2:] * 0.5
+        elif reference_points.shape[-1] == 6:
+            reference_points_cxcy = reference_points[..., :2]-reference_points[..., 2:4] + 0.5 * (reference_points[
+                ..., 2:4]+reference_points[..., 4:])
+            refer_size = reference_points[:, :, None, :, None, 2:4] + reference_points[:, :, None, :, None, 4:]
+            sampling_locations = reference_points_cxcy[:, :, None, :, None, :2] \
+                                 + sampling_offsets / self.n_points * refer_size * 0.5
         else:
             raise ValueError(
                 'Last dim of reference_points must be 2 or 4, but get {} instead.'.format(reference_points.shape[-1]))
         output = MSDeformAttnFunction.apply(
             value, input_spatial_shapes, input_level_start_index, sampling_locations, attention_weights, self.im2col_step)
         output = self.output_proj(output)
+        self.out = [attention_weights, sampling_locations, input_level_start_index, input_spatial_shapes, reference_points]
         return output

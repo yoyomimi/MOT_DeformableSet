@@ -23,9 +23,9 @@ def parse_args():
     parser.add_argument(
         '--cfg',
         dest='yaml_file',
-        default='configs/deformable_track_single_test.yaml',
+        default='configs/deformable_macthtrack_simsam.yaml',
         # default='configs/deformable_det.yaml',
-        help='experiment configure file name, e.g. configs/deformable_track_single_test.yaml',
+        help='experiment configure file name, e.g. configs/deformable_macthtrack_simsam.yaml',
         type=str)    
     # default distributed training
     parser.add_argument(
@@ -63,12 +63,12 @@ def parse_args():
 
 def read_img(img_path):
     image = Image.open(img_path).convert('RGB')
-    image, _ = resize(image, None, 800, max_size=1333)
+    image, _ = resize(image, None, 608, max_size=1088)
     image = F_trans.to_tensor(image)
     image = F_trans.normalize(image, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     return image
 
-def process_img(img_path, model, postprocessors, device, threshold=0.3):
+def process_img(img_path, model, postprocessors, device, threshold=0.38):
     model.eval()
     image = read_img(img_path)
     h, w = image.shape[1:]
@@ -109,7 +109,7 @@ if __name__ == '__main__':
     args = parse_args()
     update_config(cfg, args)
     # resume_path = '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/output/deformable_motid_DeformableBaseTrack_epoch040_checkpoint.pth'
-    resume_path = 'output/deformable_motid_right_DeformableBaseTrack_epoch005_checkpoint.pth'
+    resume_path = 'output/matchtrack_simsam_ch_DeformableMatchTrack_epoch014_checkpoint.pth'
     device = torch.device(cfg.DEVICE)
     model, criterion, postprocessors = get_model(cfg, device)  
     model.to(device)
@@ -121,7 +121,7 @@ if __name__ == '__main__':
             print(f'==> model pretrained from {resume_path} \n')
 
     results = []
-    img_root = '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/data/MOT17/test/MOT17-08-SDP/img1'
+    img_root = '/mnt/lustre/chenmingfei/data/MOT_data/MOT17/test/MOT17-08-SDP/img1'
     out_root = 'test_out/MOT17-08-SDP'
     if not os.path.exists(out_root):
         os.makedirs(out_root)
@@ -132,7 +132,7 @@ if __name__ == '__main__':
         if path.split('.')[-1] == 'json':
             continue
         img_path = os.path.join(img_root, path)
-        img, pred_out = process_img(img_path, model, postprocessors, device, threshold=0.35)
+        img, pred_out = process_img(img_path, model, postprocessors, device, threshold=0.38)
         out_path = os.path.join(out_root, path)
         results.append(pred_out)
         cv2.imwrite(out_path, img)

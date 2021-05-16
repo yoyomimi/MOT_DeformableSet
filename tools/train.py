@@ -78,11 +78,11 @@ def get_ip(ip_addr):
     for i in range(4):
         if ip_list[i][0] == '[':
             ip_list[i] = ip_list[i][1:].split(',')[0]
-    return f'tcp://{ip_list[0]}.{ip_list[1]}.{ip_list[2]}.{ip_list[3]}:13456'
+    return f'tcp://{ip_list[0]}.{ip_list[1]}.{ip_list[2]}.{ip_list[3]}:1246'
 
 def main_per_worker():
     args = parse_args()
-
+    torch.autograd.set_detect_anomaly(True)
     update_config(cfg, args)
     ngpus_per_node = torch.cuda.device_count()
 
@@ -130,7 +130,9 @@ def main_per_worker():
 
         torch.cuda.set_device(local_rank)
         device = torch.device(cfg.DEVICE)
-        model, criterion, postprocessors = get_model(cfg, device)  
+        model, criterion, postprocessors = get_model(cfg, device)
+        # OF
+        # model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         model.to(device)
         model = torch.nn.parallel.DistributedDataParallel(
             model, device_ids=[local_rank], output_device=local_rank,

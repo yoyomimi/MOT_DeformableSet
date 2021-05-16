@@ -1,4 +1,4 @@
-OUTPUT_ROOT: matchtrack_fullmot17_fix_posnorm_bugs_norefidx_layer6_again2
+OUTPUT_ROOT: matchtrack_kitti_eval
 DIST_BACKEND: 'nccl'
 WORKERS: 0
 DEVICE: cuda
@@ -6,22 +6,18 @@ SEED: 42
 DATASET:
   FILE: match_customtask
   NAME: MatchCustomTaskDataset
-  ROOT: 'data/mot17_pkl/'
-  # ROOT: 'data/new_mot_pkl/'
-  # ROOT: 'data/halfmot_pkl/'
+  ROOT: 'data/kitti_pkl/'
   MEAN: [0.485, 0.456, 0.406]
   STD: [0.229, 0.224, 0.225]
   IMG_NUM_PER_GPU: 1
   NUM_CLASSES: 2 # id 加 1
-  MAX_SIZE: 1088 #1333
-  SCALES: [608,]
+  MAX_SIZE: 1280 #1333
+  SCALES: [384,]
   PREFIX: '/mnt/lustre/chenmingfei/data/MOT_data/'
 MODEL:
   FILE: deformable_matchtrack
   NAME: DeformableMatchTrack
-  # RESUME_PATH: 'data/matchtrack_15_ch_6w_remove_for_match_DeformableMatchTrack_epoch030_checkpoint.pth'
-  RESUME_PATH: 'output/matchtrack_15_ch_6w_fix_posnorm_bugs_norefidx_layer6_DeformableMatchTrack_epoch030_checkpoint.pth'
-  # RESUME_PATH: 'output/matchtrack_ch38_mot17_crop_invalid_DeformableMatchTrack_epoch009_checkpoint.pth'
+  RESUME_PATH: 'data/r50_deformable_detr_plus_iterative_bbox_refinement_plus_plus_two_stage-checkpoint.pth'
 BACKBONE:
   NAME: resnet50
   DIALATION: False
@@ -65,10 +61,10 @@ TRAIN:
   LR_PROJ_NAMES: ['reference_points', 'sampling_offsets']
   MOMENTUM: 0.9
   WEIGHT_DECAY: 0.0001
-  LR_DROP: 15 #40
-  MAX_EPOCH: 25 #50
+  LR_DROP: 40 #40
+  MAX_EPOCH: 50 #50
   PRINT_FREQ: 20
-  SAVE_INTERVAL: 5 #5
+  SAVE_INTERVAL: 1 #5
   SAVE_EVERY_CHECKPOINT: True
   VAL_WHEN_TRAIN: False
   CLIP_MAX_NORM: 0.1

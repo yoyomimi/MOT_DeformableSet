@@ -63,8 +63,8 @@ def sigmoid_focal_loss(inputs, targets, num_boxes=None, reduction='mean', alpha:
 
 class DeformableMatchTrack(nn.Module):
     def __init__(self, backbone, transformer, num_classes, num_queries, num_feature_levels,
-                 emb_dim=64, dataset_nids=897, aux_loss=True, with_box_refine=False, two_stage=False, num_match_decoder_layers=6):
-        # ch: 355567 14687 60000 776 2324 897 757
+                 emb_dim=64, aux_loss=True, with_box_refine=False, two_stage=False, num_match_decoder_layers=3):
+        # ch: 355567 14687 60000 776
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -81,18 +81,22 @@ class DeformableMatchTrack(nn.Module):
         self.transformer = transformer
         hidden_dim = transformer.d_model
         self.det_class_embed = nn.Linear(hidden_dim, num_classes)
-        self.det_bbox_embed = MLP(hidden_dim, hidden_dim, 6, 3)
+        self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
         ###### modified ##########
-        self.id_embed =  MLP(hidden_dim, hidden_dim, emb_dim, 3)
-        self.nID = dataset_nids
+        # self.id_embed =  MLP(hidden_dim, hidden_dim, emb_dim, 3)
+        # self.nID = dataset_nids
         self.emb_dim = emb_dim
-        self.id_head = nn.Linear(self.emb_dim, self.nID)
-        nn.init.normal_(self.id_head.weight, std=0.01)
-        prior_prob = 0.01
-        bias_value = -math.log((1 - prior_prob) / prior_prob)
-        nn.init.constant_(self.id_head.bias, bias_value)
-        self.emb_scale = math.sqrt(2) * math.log(self.nID - 1)
-        # self.offset_embed = MLP(hidden_dim, hidden_dim, 2, 3)
+        self.id_projector = projection_MLP(hidden_dim, hidden_dim, emb_dim)
+        self.id_predictor = prediction_MLP(emb_dim, emb_dim, emb_dim)
+
+        # self.light_id_head = nn.Linear(self.emb_dim, self.nID)
+        # nn.init.normal_(self.light_id_head.weight, std=0.01)
+        # prior_prob = 0.01
+        # bias_value = -math.log((1 - prior_prob) / prior_prob)
+        # nn.init.constant_(self.light_id_head.bias, bias_value)
+        # # self.IDLoss = nn.CrossEntropyLoss(ignore_index=-1)
+        # self.emb_scale = math.sqrt(2) * math.log(self.nID - 1)
+        # # self.offset_embed = MLP(hidden_dim, hidden_dim, 2, 3)
         ##########################
         self.num_feature_levels = num_feature_levels
         if not two_stage:
@@ -127,26 +131,26 @@ class DeformableMatchTrack(nn.Module):
         prior_prob = 0.01
         bias_value = -math.log((1 - prior_prob) / prior_prob)
         self.det_class_embed.bias.data = torch.ones(num_classes) * bias_value
-        nn.init.constant_(self.det_bbox_embed.layers[-1].weight.data, 0)
-        nn.init.constant_(self.det_bbox_embed.layers[-1].bias.data, 0)
+        nn.init.constant_(self.bbox_embed.layers[-1].weight.data, 0)
+        nn.init.constant_(self.bbox_embed.layers[-1].bias.data, 0)
         for proj in self.input_proj:
             nn.init.xavier_uniform_(proj[0].weight, gain=1)
             nn.init.constant_(proj[0].bias, 0)
 
-        # if two-stage, the last class_embed and det_bbox_embed is for region proposal generation
+        # if two-stage, the last class_embed and bbox_embed is for region proposal generation
         num_pred = (transformer.decoder.num_layers + 1) if two_stage else transformer.decoder.num_layers
         if with_box_refine:
             self.det_class_embed = _get_clones(self.det_class_embed, num_pred)
-            self.det_bbox_embed = _get_clones(self.det_bbox_embed, num_pred)
-            nn.init.constant_(self.det_bbox_embed[0].layers[-1].bias.data[2:], -2.0)
+            self.bbox_embed = _get_clones(self.bbox_embed, num_pred)
+            nn.init.constant_(self.bbox_embed[0].layers[-1].bias.data[2:], -2.0)
             # hack implementation for iterative bounding box refinement
-            self.transformer.decoder.det_bbox_embed = self.det_bbox_embed
+            self.transformer.decoder.bbox_embed = self.bbox_embed
         else:
-            nn.init.constant_(self.det_bbox_embed.layers[-1].bias.data[2:], -2.0)
+            nn.init.constant_(self.bbox_embed.layers[-1].bias.data[2:], -2.0)
             # nn.init.constant_(self.offset_embed.layers[-1].bias.data[2:], -2.0)
             self.det_class_embed = nn.ModuleList([self.det_class_embed for _ in range(num_pred)])
-            self.det_bbox_embed = nn.ModuleList([self.det_bbox_embed for _ in range(num_pred)])
-            self.transformer.decoder.det_bbox_embed = None
+            self.bbox_embed = nn.ModuleList([self.bbox_embed for _ in range(num_pred)])
+            self.transformer.decoder.bbox_embed = None
         if two_stage:
             # hack implementation for two-stage
             self.transformer.decoder.det_class_embed = self.det_class_embed
@@ -155,18 +159,17 @@ class DeformableMatchTrack(nn.Module):
             # for offset_embed in self.offset_embed:
             #     nn.init.constant_(offset_embed.layers[-1].bias.data[2:], 0.0)
             ##########################
-            for box_embed in self.det_bbox_embed:
+            for box_embed in self.bbox_embed:
                 nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
         # match
         self.ref_embed = MLP(hidden_dim, hidden_dim, 2, 3)
         nn.init.constant_(self.ref_embed.layers[-1].weight.data, 0)
         nn.init.constant_(self.ref_embed.layers[-1].bias.data, 0)
+        # nn.init.constant_(self.ref_embed.layers[-1].bias.data[2:], -2.0)
         self.ref_embed = _get_clones(self.ref_embed, num_match_decoder_layers)
         nn.init.constant_(self.ref_embed[0].layers[-1].bias.data[2:], -2.0)
-        # self.transformer.match_decoder.det_bbox_embed = self.ref_embed
-        # for box_embed in self.ref_embed:
-        #     nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
-        self.ref_id_embed = copy.deepcopy(self.id_embed)
+        # self.ref_id_embed = copy.deepcopy(self.id_embed)
+        
 
     def forward(self, samples: NestedTensor, references=None):
         """ The forward expects a NestedTensor, which consists of:
@@ -221,7 +224,7 @@ class DeformableMatchTrack(nn.Module):
             # ref_id_embed = self.ref_id_embed(match_hs)
             # ref_id_feature = ref_id_embed.clone()
             # ref_id_embed = self.emb_scale * F.normalize(ref_id_embed)
-            # ref_id_embed = self.id_head(ref_id_embed.contiguous())
+            # ref_id_embed = self.light_id_head(ref_id_embed.contiguous())
             # tmp = self.ref_embed(match_hs)
             # tmp += ref_boxes
             # ref_coords = tmp.sigmoid()
@@ -233,18 +236,18 @@ class DeformableMatchTrack(nn.Module):
                 else:
                     reference = match_inter_references[lvl - 1]
                 reference = inverse_sigmoid(reference)
-                if lvl == match_hs.shape[0] - 1:
-                    ref_id_embed = self.ref_id_embed(match_hs[lvl])
-                    ref_id_feature = ref_id_embed.clone()
-                    ref_id_embed = self.emb_scale * F.normalize(ref_id_embed)
-                    ref_id_embed = self.id_head(ref_id_embed.contiguous())
+                # if lvl == match_hs.shape[0] - 1:
+                #     ref_id_embed = self.ref_id_embed(match_hs[lvl])
+                #     ref_id_feature = ref_id_embed.clone()
+                #     ref_id_embed = self.emb_scale * F.normalize(ref_id_embed)
+                #     ref_id_embed = self.light_id_head(ref_id_embed.contiguous())
                 tmp = self.ref_embed[lvl](match_hs[lvl])
                 tmp += reference
                 ref_coords.append(tmp.sigmoid())
 
         outputs_classes = []
         outputs_coords = []
-        outputs_id_embeds = []
+        outputs_id_preds = []
         outputs_id_features = []
         outputs_next_centers = []
         for lvl in range(hs.shape[0]):
@@ -256,27 +259,23 @@ class DeformableMatchTrack(nn.Module):
             outputs_class = self.det_class_embed[lvl](hs[lvl])
             ###### modified ##########
             if lvl == hs.shape[0] - 1:
-                outputs_id_embed = self.id_embed(hs[lvl])
-                outputs_id_features.append(outputs_id_embed.clone())
-                outputs_id_embed = self.emb_scale * F.normalize(outputs_id_embed)
-                outputs_id_embed = self.id_head(outputs_id_embed.contiguous())
-                # outputs_id_embed = None
-                outputs_id_embeds.append(outputs_id_embed)
+                outputs_id_embed = self.id_projector(hs[lvl].flatten(0, 1))
+                outputs_id_features.append(outputs_id_embed.reshape(
+                    hs[lvl].shape[0], hs[lvl].shape[1], -1))
+                outputs_id_pred = self.id_predictor(outputs_id_embed)
+                outputs_id_preds.append(outputs_id_pred.reshape(
+                    hs[lvl].shape[0], hs[lvl].shape[1], -1))
             # next_center_tmp = self.offset_embed[lvl](hs[lvl])
             ##########################
-            tmp = self.det_bbox_embed[lvl](hs[lvl])
-
-            if reference.shape[-1] > 2:
+            tmp = self.bbox_embed[lvl](hs[lvl])
+            if reference.shape[-1] == 4:
                 tmp += reference
                 # next_center_tmp += reference[..., :2]
             else:
                 assert reference.shape[-1] == 2
                 tmp[..., :2] += reference
                 # next_center_tmp += reference
-            coord = tmp.sigmoid()
-            self.out_pred_boxes = coord
-            coord_cxcy = coord[..., :2]-coord[..., 2:4] + 0.5 * (coord[..., 2:4]+coord[..., 4:])
-            outputs_coord = torch.cat([coord_cxcy, coord[..., 2:4]+coord[..., 4:]], dim=-1)
+            outputs_coord = tmp.sigmoid()
             # outputs_next_center = next_center_tmp.sigmoid()
 
             outputs_classes.append(outputs_class)
@@ -284,30 +283,27 @@ class DeformableMatchTrack(nn.Module):
             # outputs_next_centers.append(outputs_next_center)
         outputs_class = torch.stack(outputs_classes)
         outputs_coord = torch.stack(outputs_coords)
-        outputs_id_embed = outputs_id_embeds[-1]
-        outputs_id_features = outputs_id_features[-1]
-        self.out_prob = outputs_class[-1].sigmoid()[..., 1]
-        self.out_id_features = outputs_id_features
+        # outputs_id_preds = outputs_id_preds[-1]
+        # outputs_id_features = outputs_id_features[-1]
+        self.out_id_features = outputs_id_features[-1].clone()
+        self.out_id_preds = outputs_id_preds[-1].clone()
+        self.out_pred_boxes = outputs_coord[-1].clone()
         # outputs_next_center = torch.stack(outputs_next_centers)
-        # if (outputs_coord[-1][..., 1] > 1.0).any():
-        #     import pdb; pdb.set_trace()
+
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
-               'id_embeds': outputs_id_embed, 'id_features': outputs_id_features,
-               'out_pred_boxes': self.out_pred_boxes
+               'id_preds': outputs_id_preds[-1], 'id_features': outputs_id_features[-1]
             #    'next_cenetrs': outputs_next_center[-1]
                }
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
 
         if self.two_stage:
-            coord = enc_outputs_coord_unact.sigmoid()
-            coord_cxcy = coord[..., :2]-coord[..., 2:4] + 0.5 * (coord[..., 2:4]+coord[..., 4:])
-            enc_outputs_coord = torch.cat([coord_cxcy, coord[..., 2:4]+coord[..., 4:]], dim=-1)
+            enc_outputs_coord = enc_outputs_coord_unact.sigmoid()
             out['enc_outputs'] = {'pred_logits': enc_outputs_class, 'pred_boxes': enc_outputs_coord}
         
         if references is not None and match_hs is not None:
-            out['ref_outputs'] = {'ref_coords': ref_coords[-1],
-               'ref_id_embeds': ref_id_embed, 'ref_id_features': ref_id_feature}
+            out['ref_outputs'] = {'ref_coords': ref_coords[-1]}
+            #    'ref_id_embeds': ref_id_embed, 'ref_id_features': ref_id_feature}
             out['aux_ref_outputs'] = [{'ref_coords': a} for a in ref_coords[:-1]]
         return out
 
@@ -405,21 +401,44 @@ class SetCriterion(nn.Module):
         else:
             target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
             target_ids = torch.cat([t['ids'][i] for t, (_, i) in zip(targets, indices)], dim=0).long()
-        if 'id_embeds' in outputs:
-            valids_ids = torch.where(target_ids>-1)[0]
-            target_ids = target_ids[valids_ids]
-            outputs_src_id_logits = outputs['id_embeds'][idx][valids_ids].contiguous()
-            # loss_ids = F.cross_entropy(outputs_src_id_logits, target_ids, ignore_index=-1)
-            target_ids_onehot = torch.zeros([outputs_src_id_logits.shape[0], outputs_src_id_logits.shape[1] + 1],
-                                                dtype=outputs_src_id_logits.dtype, layout=outputs_src_id_logits.layout, device=outputs_src_id_logits.device)
-            target_ids_onehot.scatter_(1, target_ids.unsqueeze(-1), 1)
+        if 'id_preds' in outputs and self.references is not None and self.ori_indices is not None and self.ref_num_boxes is not None:
+            valid_idx = []
+            id_indices = []
+            for i in range(len(indices)):
+                src, tgt = indices[i]
+                idx_map = self.references[i]['idx_map']
+                if len(idx_map) > 0:
+                    valid_idx.append(torch.as_tensor([torch.where(tgt==j)[0][0] for j in idx_map]))
+                    id_indices.append([src[valid_idx[-1]], tgt[valid_idx[-1]]])
+                else:
+                    id_indices.append([src, tgt])
+            if len(valid_idx) == 0:
+                losses['loss_ids'] = torch.Tensor([0.]).mean().to(device)
+            else:
+                id_idx = self._get_src_permutation_idx(id_indices)
+                # import pdb; pdb.set_trace()
+                # prev_id_features = torch.cat([r["ref_features"][idx] for r, (_, idx) in zip(
+                #     self.references, id_indices)])
+                prev_id_features = torch.cat([r["ref_features"] for r in self.references])
+                id_features = outputs['id_features'][id_idx]
+                id_preds = outputs['id_preds'][id_idx]
+                assert len(id_preds.shape) == 2
+                loss_ids = - F.cosine_similarity(id_preds, prev_id_features.detach(), dim=1).sum() / self.ref_num_boxes
+                # valids_ids = torch.where(target_ids>-1)[0]
+                # target_ids = target_ids[valids_ids]
+                # # target_ids -> pre_ids
+                # outputs_src_id_logits = outputs['id_preds'][idx][valids_ids].contiguous()
+                # # loss_ids = self.IDLoss(outputs_src_id_logits, target_ids)
+                # target_ids_onehot = torch.zeros([outputs_src_id_logits.shape[0], outputs_src_id_logits.shape[1] + 1],
+                #                                  dtype=outputs_src_id_logits.dtype, layout=outputs_src_id_logits.layout, device=outputs_src_id_logits.device)
+                # target_ids_onehot.scatter_(1, target_ids.unsqueeze(-1), 1)
 
-            target_ids_onehot = target_ids_onehot[:,:-1]
-            loss_ids = sigmoid_focal_loss(outputs_src_id_logits, target_ids_onehot, reduction='sum', alpha=self.focal_alpha, gamma=2) / max(1, outputs_src_id_logits.shape[0])
-            if log:
-                # TODO this should probably be a separate loss, not hacked in this one here
-                losses['id_class_error'] = 100 - accuracy(outputs_src_id_logits, target_ids)[0]
-            losses['loss_ids'] = loss_ids
+                # target_ids_onehot = target_ids_onehot[:,:-1]
+                # loss_ids = sigmoid_focal_loss(outputs_src_id_logits, target_ids_onehot, reduction='sum', alpha=self.focal_alpha, gamma=2) / max(1, outputs_src_id_logits.shape[0])
+                losses = {'loss_ids': loss_ids}
+                # if log:
+                #     # TODO this should probably be a separate loss, not hacked in this one here
+                #     losses['id_class_error'] = 100 - accuracy(outputs_src_id_logits, target_ids)[0]
         ##########################
         loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
         losses['loss_bbox'] = loss_bbox.sum() / num_boxes
@@ -451,19 +470,19 @@ class SetCriterion(nn.Module):
             loss_offset = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
             losses[f'aux_loss_offset_{i}'] = loss_offset.sum() / num_boxes
         # id
-        target_ids = torch.cat([t['gt_ref_ids'] for t in targets], dim=0).long()
-        valids_ids = torch.where(target_ids>-1)[0]
-        target_ids = target_ids[valids_ids]
-        outputs_src_id_logits = outputs['ref_outputs']['ref_id_embeds'].flatten(0, 1)
-        outputs_src_id_logits = outputs_src_id_logits[valids_ids].contiguous()
-        # loss_ids = F.cross_entropy(outputs_src_id_logits, target_ids, ignore_index=-1)
-        target_ids_onehot = torch.zeros([outputs_src_id_logits.shape[0], outputs_src_id_logits.shape[1] + 1],
-                                        dtype=outputs_src_id_logits.dtype, layout=outputs_src_id_logits.layout, device=outputs_src_id_logits.device)
-        target_ids_onehot.scatter_(1, target_ids.unsqueeze(-1), 1)
+        # target_ids = torch.cat([t['gt_ref_ids'] for t in targets], dim=0).long()
+        # valids_ids = torch.where(target_ids>-1)[0]
+        # target_ids = target_ids[valids_ids]
+        # outputs_src_id_logits = outputs['ref_outputs']['ref_id_embeds'].flatten(0, 1)
+        # outputs_src_id_logits = outputs_src_id_logits[valids_ids].contiguous()
+        # # loss_ids = self.IDLoss(outputs_src_id_logits, target_ids)
+        # target_ids_onehot = torch.zeros([outputs_src_id_logits.shape[0], outputs_src_id_logits.shape[1] + 1],
+        #                                 dtype=outputs_src_id_logits.dtype, layout=outputs_src_id_logits.layout, device=outputs_src_id_logits.device)
+        # target_ids_onehot.scatter_(1, target_ids.unsqueeze(-1), 1)
 
-        target_ids_onehot = target_ids_onehot[:,:-1]
-        loss_ids = sigmoid_focal_loss(outputs_src_id_logits, target_ids_onehot, reduction='sum', alpha=self.focal_alpha, gamma=2) / max(1, outputs_src_id_logits.shape[0])
-        losses['match_loss_ids'] = loss_ids
+        # target_ids_onehot = target_ids_onehot[:,:-1]
+        # loss_ids = sigmoid_focal_loss(outputs_src_id_logits, target_ids_onehot, reduction='sum', alpha=self.focal_alpha, gamma=2) / max(1, outputs_src_id_logits.shape[0])
+        # losses['match_loss_ids'] = loss_ids
         return losses
         
     def _get_src_permutation_idx(self, indices):
@@ -501,20 +520,32 @@ class SetCriterion(nn.Module):
                 "idx_map": Tensor of dim [num_refer_boxes, num_targets], map the refer index to the target index
         """
         outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs' and k != 'enc_outputs' and k != 'ref_outputs' and k != 'aux_ref_outputs'}
-        # if references is not None and 'ref_outputs' in outputs:
-        #     ref_outputs = outputs['ref_outputs']
-        #     ori_indices, ref_indices = self.refer_matcher(ref_outputs, outputs_without_aux, references)
-        # else:
-        #     ref_indices = None
+        if references is not None and 'ref_outputs' in outputs:
+            ref_outputs = outputs['ref_outputs']
+            ori_indices, ref_indices = self.refer_matcher(ref_outputs, outputs_without_aux, references)
+        else:
+            ref_indices = None
+            ori_indices = None
+        self.ref_indices = ref_indices
+        self.ori_indices = ori_indices
+        self.references = references
         # Retrieve the matching between the outputs of the last layer and the targets
-        ref_indices = None
         indices = self.matcher(outputs_without_aux, targets, ref_indices, is_next)
         self.out_indices = indices
         # Compute the average number of target boxes accross all nodes, for normalization purposes
         if is_next is True:
             num_boxes = sum(len(t["next_labels"]) for t in targets)
+            if references is None:
+                self.ref_num_boxes = num_boxes
+            else:
+                ref_num_boxes = sum(len(r["gt_ref_boxes"]) for r in references)
+                ref_num_boxes = torch.as_tensor([ref_num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
+                if is_dist_avail_and_initialized():
+                    torch.distributed.all_reduce(ref_num_boxes)
+                self.ref_num_boxes = torch.clamp(ref_num_boxes / get_world_size(), min=1).item()
         else:
             num_boxes = sum(len(t["labels"]) for t in targets)
+            self.ref_num_boxes = None
         num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
         if is_dist_avail_and_initialized():
             torch.distributed.all_reduce(num_boxes)
@@ -562,15 +593,7 @@ class SetCriterion(nn.Module):
         # ref outputs
         if is_next is True:
             # regression loss for ref outputs
-            if references is None:
-                ref_num_boxes = num_boxes
-            else:
-                ref_num_boxes = sum(len(r["gt_ref_boxes"]) for r in references)
-                ref_num_boxes = torch.as_tensor([ref_num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
-                if is_dist_avail_and_initialized():
-                    torch.distributed.all_reduce(ref_num_boxes)
-                ref_num_boxes = torch.clamp(ref_num_boxes / get_world_size(), min=1).item()
-            losses.update(self.loss_match(outputs, references, None, ref_num_boxes, is_next=is_next))
+            losses.update(self.loss_match(outputs, references, None, self.ref_num_boxes, is_next=is_next))
 
         return losses
 
@@ -580,7 +603,7 @@ class PostProcess(nn.Module):
     def __init__(self):
         super().__init__()
         from libs.models.matcher import MatchTrackMatcher
-        self.refer_matcher = MatchTrackMatcher(det_thr=0.4, cost_limit=0.8)
+        self.refer_matcher = MatchTrackMatcher(det_thr=0.38, cost_limit=1.0)
 
     @torch.no_grad()
     def forward(self, outputs, filename, target_sizes, references=None):
@@ -593,7 +616,6 @@ class PostProcess(nn.Module):
         """
         out_logits, out_bbox = outputs['pred_logits'], outputs['pred_boxes']
         id_features = outputs['id_features']
-        out_pred_boxes = outputs['out_pred_boxes']
 
         assert len(out_logits) == len(target_sizes)
         assert target_sizes.shape[1] == 2
@@ -611,7 +633,7 @@ class PostProcess(nn.Module):
             for sid, tid in zip(src_idx, tgt_idx):
                 track_idx[sid] = tid
             ref_coords = ref_outputs['ref_coords']
-            ref_id_features = ref_outputs['ref_id_features']
+
         prob = out_logits.sigmoid()
         topk_values, topk_indexes = torch.topk(prob.view(out_logits.shape[0], -1), 100, dim=1)
         scores = topk_values
@@ -620,23 +642,14 @@ class PostProcess(nn.Module):
         boxes = box_ops.box_cxcywh_to_xyxy(out_bbox)
         boxes = torch.gather(boxes, 1, topk_boxes.unsqueeze(-1).repeat(1,1,4))
         boxes = boxes * scale_fct[:, None, :]
-
-        out_pred_boxes = torch.gather(out_pred_boxes, 1, topk_boxes.unsqueeze(-1).repeat(1,1,out_pred_boxes.shape[-1]))
-        scale_fct_6d = torch.stack([img_w, img_h, img_w, img_h, img_w, img_h], dim=1)
-        out_pred_boxes = out_pred_boxes * scale_fct_6d[:, None, :]
-        # boxes = torch.cat([out_pred_boxes[..., :2]-out_pred_boxes[..., 2:4], out_pred_boxes[
-        #     ..., :2]+out_pred_boxes[..., 4:]], dim=-1)
-
         filenames = [filename] * len(scores)
         results = [{'filename': f, 'scores': s, 'labels': l, 'boxes': b} for f, s, l, b in zip(
             filenames, scores, labels, boxes)]
-        results[-1]['out_pred_boxes'] = out_pred_boxes
         results[-1]['id_features'] = id_features.reshape(-1, id_features.shape[
             -1])[topk_boxes[0]]
         results[-1]['track_idx'] = track_idx[topk_boxes[0]]
         if references is not None:
             results[-1]['ref_coords'] = ref_coords * scale_fct[:, None, :2]
-            results[-1]['ref_id_features'] = ref_id_features
 
         return results
 
@@ -654,6 +667,65 @@ class MLP(nn.Module):
         for i, layer in enumerate(self.layers):
             x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
         return x
+
+
+class projection_MLP(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim):
+        super().__init__()
+        ''' baseline setting
+        Projection MLP. The projection MLP (in f) has BN ap-
+        plied to each fully-connected (fc) layer, including its out- 
+        put fc. Its output fc has no ReLU. The hidden fc is 2048-d. 
+        This MLP has 3 layers.
+        '''
+        self.layer1 = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU()
+        )
+        self.layer2 = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU()
+        )
+        self.layer3 = nn.Sequential(
+            nn.Linear(hidden_dim, output_dim),
+            nn.BatchNorm1d(output_dim)
+        )
+
+    def forward(self, x):
+        x_hidden1 = self.layer1(x.clone())
+        x_hidden2 = self.layer2(x_hidden1)
+        x_out = self.layer3(x_hidden2)
+        return x_out
+
+
+class prediction_MLP(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim):
+        super().__init__()
+        ''' page 3 baseline setting
+        Prediction MLP. The prediction MLP (h) has BN applied 
+        to its hidden fc layers. Its output fc does not have BN
+        (ablation in Sec. 4.4) or ReLU. This MLP has 2 layers. 
+        The dimension of h’s input and output (z and p) is d = 2048, 
+        and h’s hidden layer’s dimension is 512, making h a 
+        bottleneck structure (ablation in supplement). 
+        '''
+        self.layer1 = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+        )
+        self.layer2 = nn.Linear(hidden_dim, output_dim)
+        """
+        Adding BN to the output of the prediction MLP h does not work
+        well (Table 3d). We find that this is not about collapsing. 
+        The training is unstable and the loss oscillates.
+        """
+
+    def forward(self, x):
+        x_hidden = F.relu(self.layer1(x.clone()))
+        x_out = self.layer2(x_hidden)
+        return x_out 
 
 
 def build_model(cfg, device):
@@ -686,10 +758,7 @@ def build_model(cfg, device):
     weight_dict['loss_offset'] = cfg.LOSS.OFFSET_LOSS_COEF
     weight_dict['aux_loss_offset_0'] = cfg.LOSS.OFFSET_LOSS_COEF
     weight_dict['aux_loss_offset_1'] = cfg.LOSS.OFFSET_LOSS_COEF
-    weight_dict['aux_loss_offset_2'] = cfg.LOSS.OFFSET_LOSS_COEF
-    weight_dict['aux_loss_offset_3'] = cfg.LOSS.OFFSET_LOSS_COEF
-    weight_dict['aux_loss_offset_4'] = cfg.LOSS.OFFSET_LOSS_COEF
-    weight_dict['match_loss_ids'] = cfg.LOSS.ID_LOSS_COEF
+    # weight_dict['match_loss_ids'] = cfg.LOSS.ID_LOSS_COEF
     weight_dict['loss_ids'] = cfg.LOSS.ID_LOSS_COEF
 
     losses = ['labels', 'boxes', 'cardinality']

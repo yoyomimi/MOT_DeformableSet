@@ -63,8 +63,8 @@ def sigmoid_focal_loss(inputs, targets, num_boxes=None, reduction='mean', alpha:
 
 class DeformableMatchTrack(nn.Module):
     def __init__(self, backbone, transformer, num_classes, num_queries, num_feature_levels,
-                 emb_dim=64, dataset_nids=897, aux_loss=True, with_box_refine=False, two_stage=False, num_match_decoder_layers=6):
-        # ch: 355567 14687 60000 776 2324 897 757
+                 emb_dim=64, dataset_nids=776, aux_loss=True, with_box_refine=False, two_stage=False, num_match_decoder_layers=3):
+        # ch: 355567 14687 60000 776 2324 897
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -86,11 +86,11 @@ class DeformableMatchTrack(nn.Module):
         self.id_embed =  MLP(hidden_dim, hidden_dim, emb_dim, 3)
         self.nID = dataset_nids
         self.emb_dim = emb_dim
-        self.id_head = nn.Linear(self.emb_dim, self.nID)
-        nn.init.normal_(self.id_head.weight, std=0.01)
+        self.light_id_head = nn.Linear(self.emb_dim, self.nID)
+        nn.init.normal_(self.light_id_head.weight, std=0.01)
         prior_prob = 0.01
         bias_value = -math.log((1 - prior_prob) / prior_prob)
-        nn.init.constant_(self.id_head.bias, bias_value)
+        nn.init.constant_(self.light_id_head.bias, bias_value)
         self.emb_scale = math.sqrt(2) * math.log(self.nID - 1)
         # self.offset_embed = MLP(hidden_dim, hidden_dim, 2, 3)
         ##########################
@@ -140,13 +140,13 @@ class DeformableMatchTrack(nn.Module):
             self.det_bbox_embed = _get_clones(self.det_bbox_embed, num_pred)
             nn.init.constant_(self.det_bbox_embed[0].layers[-1].bias.data[2:], -2.0)
             # hack implementation for iterative bounding box refinement
-            self.transformer.decoder.det_bbox_embed = self.det_bbox_embed
+            self.transformer.decoder.bbox_embed = self.det_bbox_embed
         else:
             nn.init.constant_(self.det_bbox_embed.layers[-1].bias.data[2:], -2.0)
             # nn.init.constant_(self.offset_embed.layers[-1].bias.data[2:], -2.0)
             self.det_class_embed = nn.ModuleList([self.det_class_embed for _ in range(num_pred)])
             self.det_bbox_embed = nn.ModuleList([self.det_bbox_embed for _ in range(num_pred)])
-            self.transformer.decoder.det_bbox_embed = None
+            self.transformer.decoder.bbox_embed = None
         if two_stage:
             # hack implementation for two-stage
             self.transformer.decoder.det_class_embed = self.det_class_embed
@@ -161,12 +161,11 @@ class DeformableMatchTrack(nn.Module):
         self.ref_embed = MLP(hidden_dim, hidden_dim, 2, 3)
         nn.init.constant_(self.ref_embed.layers[-1].weight.data, 0)
         nn.init.constant_(self.ref_embed.layers[-1].bias.data, 0)
+        # nn.init.constant_(self.ref_embed.layers[-1].bias.data[2:], -2.0)
         self.ref_embed = _get_clones(self.ref_embed, num_match_decoder_layers)
         nn.init.constant_(self.ref_embed[0].layers[-1].bias.data[2:], -2.0)
-        # self.transformer.match_decoder.det_bbox_embed = self.ref_embed
-        # for box_embed in self.ref_embed:
-        #     nn.init.constant_(box_embed.layers[-1].bias.data[2:], 0.0)
         self.ref_id_embed = copy.deepcopy(self.id_embed)
+        
 
     def forward(self, samples: NestedTensor, references=None):
         """ The forward expects a NestedTensor, which consists of:
@@ -221,7 +220,7 @@ class DeformableMatchTrack(nn.Module):
             # ref_id_embed = self.ref_id_embed(match_hs)
             # ref_id_feature = ref_id_embed.clone()
             # ref_id_embed = self.emb_scale * F.normalize(ref_id_embed)
-            # ref_id_embed = self.id_head(ref_id_embed.contiguous())
+            # ref_id_embed = self.light_id_head(ref_id_embed.contiguous())
             # tmp = self.ref_embed(match_hs)
             # tmp += ref_boxes
             # ref_coords = tmp.sigmoid()
@@ -237,7 +236,7 @@ class DeformableMatchTrack(nn.Module):
                     ref_id_embed = self.ref_id_embed(match_hs[lvl])
                     ref_id_feature = ref_id_embed.clone()
                     ref_id_embed = self.emb_scale * F.normalize(ref_id_embed)
-                    ref_id_embed = self.id_head(ref_id_embed.contiguous())
+                    ref_id_embed = self.light_id_head(ref_id_embed.contiguous())
                 tmp = self.ref_embed[lvl](match_hs[lvl])
                 tmp += reference
                 ref_coords.append(tmp.sigmoid())
@@ -259,24 +258,20 @@ class DeformableMatchTrack(nn.Module):
                 outputs_id_embed = self.id_embed(hs[lvl])
                 outputs_id_features.append(outputs_id_embed.clone())
                 outputs_id_embed = self.emb_scale * F.normalize(outputs_id_embed)
-                outputs_id_embed = self.id_head(outputs_id_embed.contiguous())
+                outputs_id_embed = self.light_id_head(outputs_id_embed.contiguous())
                 # outputs_id_embed = None
                 outputs_id_embeds.append(outputs_id_embed)
             # next_center_tmp = self.offset_embed[lvl](hs[lvl])
             ##########################
             tmp = self.det_bbox_embed[lvl](hs[lvl])
-
-            if reference.shape[-1] > 2:
+            if reference.shape[-1] == 4:
                 tmp += reference
                 # next_center_tmp += reference[..., :2]
             else:
                 assert reference.shape[-1] == 2
                 tmp[..., :2] += reference
                 # next_center_tmp += reference
-            coord = tmp.sigmoid()
-            self.out_pred_boxes = coord
-            coord_cxcy = coord[..., :2]-coord[..., 2:4] + 0.5 * (coord[..., 2:4]+coord[..., 4:])
-            outputs_coord = torch.cat([coord_cxcy, coord[..., 2:4]+coord[..., 4:]], dim=-1)
+            outputs_coord = tmp.sigmoid()
             # outputs_next_center = next_center_tmp.sigmoid()
 
             outputs_classes.append(outputs_class)
@@ -286,23 +281,19 @@ class DeformableMatchTrack(nn.Module):
         outputs_coord = torch.stack(outputs_coords)
         outputs_id_embed = outputs_id_embeds[-1]
         outputs_id_features = outputs_id_features[-1]
-        self.out_prob = outputs_class[-1].sigmoid()[..., 1]
         self.out_id_features = outputs_id_features
+        self.out_pred_boxes = outputs_coord[-1]
         # outputs_next_center = torch.stack(outputs_next_centers)
-        # if (outputs_coord[-1][..., 1] > 1.0).any():
-        #     import pdb; pdb.set_trace()
+
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
-               'id_embeds': outputs_id_embed, 'id_features': outputs_id_features,
-               'out_pred_boxes': self.out_pred_boxes
+               'id_embeds': outputs_id_embed, 'id_features': outputs_id_features
             #    'next_cenetrs': outputs_next_center[-1]
                }
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
 
         if self.two_stage:
-            coord = enc_outputs_coord_unact.sigmoid()
-            coord_cxcy = coord[..., :2]-coord[..., 2:4] + 0.5 * (coord[..., 2:4]+coord[..., 4:])
-            enc_outputs_coord = torch.cat([coord_cxcy, coord[..., 2:4]+coord[..., 4:]], dim=-1)
+            enc_outputs_coord = enc_outputs_coord_unact.sigmoid()
             out['enc_outputs'] = {'pred_logits': enc_outputs_class, 'pred_boxes': enc_outputs_coord}
         
         if references is not None and match_hs is not None:
@@ -501,13 +492,12 @@ class SetCriterion(nn.Module):
                 "idx_map": Tensor of dim [num_refer_boxes, num_targets], map the refer index to the target index
         """
         outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs' and k != 'enc_outputs' and k != 'ref_outputs' and k != 'aux_ref_outputs'}
-        # if references is not None and 'ref_outputs' in outputs:
-        #     ref_outputs = outputs['ref_outputs']
-        #     ori_indices, ref_indices = self.refer_matcher(ref_outputs, outputs_without_aux, references)
-        # else:
-        #     ref_indices = None
+        if references is not None and 'ref_outputs' in outputs:
+            ref_outputs = outputs['ref_outputs']
+            ori_indices, ref_indices = self.refer_matcher(ref_outputs, outputs_without_aux, references)
+        else:
+            ref_indices = None
         # Retrieve the matching between the outputs of the last layer and the targets
-        ref_indices = None
         indices = self.matcher(outputs_without_aux, targets, ref_indices, is_next)
         self.out_indices = indices
         # Compute the average number of target boxes accross all nodes, for normalization purposes
@@ -580,7 +570,7 @@ class PostProcess(nn.Module):
     def __init__(self):
         super().__init__()
         from libs.models.matcher import MatchTrackMatcher
-        self.refer_matcher = MatchTrackMatcher(det_thr=0.4, cost_limit=0.8)
+        self.refer_matcher = MatchTrackMatcher(det_thr=0.38, cost_limit=1.0)
 
     @torch.no_grad()
     def forward(self, outputs, filename, target_sizes, references=None):
@@ -593,7 +583,6 @@ class PostProcess(nn.Module):
         """
         out_logits, out_bbox = outputs['pred_logits'], outputs['pred_boxes']
         id_features = outputs['id_features']
-        out_pred_boxes = outputs['out_pred_boxes']
 
         assert len(out_logits) == len(target_sizes)
         assert target_sizes.shape[1] == 2
@@ -620,17 +609,9 @@ class PostProcess(nn.Module):
         boxes = box_ops.box_cxcywh_to_xyxy(out_bbox)
         boxes = torch.gather(boxes, 1, topk_boxes.unsqueeze(-1).repeat(1,1,4))
         boxes = boxes * scale_fct[:, None, :]
-
-        out_pred_boxes = torch.gather(out_pred_boxes, 1, topk_boxes.unsqueeze(-1).repeat(1,1,out_pred_boxes.shape[-1]))
-        scale_fct_6d = torch.stack([img_w, img_h, img_w, img_h, img_w, img_h], dim=1)
-        out_pred_boxes = out_pred_boxes * scale_fct_6d[:, None, :]
-        # boxes = torch.cat([out_pred_boxes[..., :2]-out_pred_boxes[..., 2:4], out_pred_boxes[
-        #     ..., :2]+out_pred_boxes[..., 4:]], dim=-1)
-
         filenames = [filename] * len(scores)
         results = [{'filename': f, 'scores': s, 'labels': l, 'boxes': b} for f, s, l, b in zip(
             filenames, scores, labels, boxes)]
-        results[-1]['out_pred_boxes'] = out_pred_boxes
         results[-1]['id_features'] = id_features.reshape(-1, id_features.shape[
             -1])[topk_boxes[0]]
         results[-1]['track_idx'] = track_idx[topk_boxes[0]]
@@ -686,9 +667,6 @@ def build_model(cfg, device):
     weight_dict['loss_offset'] = cfg.LOSS.OFFSET_LOSS_COEF
     weight_dict['aux_loss_offset_0'] = cfg.LOSS.OFFSET_LOSS_COEF
     weight_dict['aux_loss_offset_1'] = cfg.LOSS.OFFSET_LOSS_COEF
-    weight_dict['aux_loss_offset_2'] = cfg.LOSS.OFFSET_LOSS_COEF
-    weight_dict['aux_loss_offset_3'] = cfg.LOSS.OFFSET_LOSS_COEF
-    weight_dict['aux_loss_offset_4'] = cfg.LOSS.OFFSET_LOSS_COEF
     weight_dict['match_loss_ids'] = cfg.LOSS.ID_LOSS_COEF
     weight_dict['loss_ids'] = cfg.LOSS.ID_LOSS_COEF
 
