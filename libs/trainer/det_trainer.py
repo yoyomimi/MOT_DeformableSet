@@ -86,6 +86,8 @@ class TrackTrainer(BaseTrainer):
         references = []
         for i in range(len(indices)):
             src, tgt = indices[i]
+            src = src.to(self.device)
+            tgt = tgt.to(self.device)
             matched_idx = targets[i]['matched_idx']
             input_size = torch.as_tensor([imgs[i].shape[2], imgs[i].shape[1]]).reshape(1, 2).long()
             idx_map = targets[i]['idx_map']

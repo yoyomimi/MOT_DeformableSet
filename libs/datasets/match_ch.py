@@ -37,13 +37,13 @@ class MatchCHDataset(Dataset):
             if len(anno['ann']['extra_anns']) == 0:
                 anno['ann']['extra_anns'] = -np.ones(len(anno['ann']['bboxes'])).reshape(-1, )
             for j, single_id in enumerate(anno['ann']['extra_anns']):
-                if cur_id >= 60000:
-                    anno['ann']['extra_anns'][j] = -1
-                else:
-                    anno['ann']['extra_anns'][j] = cur_id
-                    cur_id += 1
-                # anno['ann']['extra_anns'][j] = cur_id
-                # cur_id += 1
+                # if cur_id >= 60000:
+                #     anno['ann']['extra_anns'][j] = -1
+                # else:
+                #     anno['ann']['extra_anns'][j] = cur_id
+                #     cur_id += 1
+                anno['ann']['extra_anns'][j] = cur_id
+                cur_id += 1
             if istrain is False:
                 self.ids.append(i)
             else:
@@ -68,8 +68,8 @@ class MatchCHDataset(Dataset):
         # affine the same pic
         affine_flag = True
         anno = self.annotations[self.ids[index]]
-        filename = anno['filename']
-        img_path = os.path.join(self.img_root, filename)
+        filename = anno['filename'].split('/')[-1]
+        img_path = os.path.join(self.img_root, 'crowdhuman/image/', filename)
         if not osp.exists(img_path):
             logging.error("Cannot find image data: " + img_path)
             raise FileNotFoundError

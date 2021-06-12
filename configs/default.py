@@ -53,6 +53,7 @@ _C.MODEL.NAME = ''
 # resume
 _C.MODEL.RESUME_PATH = ''
 _C.MODEL.MASKS = False
+_C.MODEL.MODEL_CONFIG = ''
 
 # backbone
 _C.BACKBONE = CN()
@@ -108,6 +109,7 @@ _C.TRAINER.NAME = ''
 
 # train
 _C.TRAIN = CN()
+_C.TRAIN.HYP_CONFIG = ''
 _C.TRAIN.OPTIMIZER = ''
 _C.TRAIN.LR = 0.0002
 _C.TRAIN.LR_BACKBONE_NAMES = ["backbone.0"]

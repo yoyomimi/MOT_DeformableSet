@@ -8,6 +8,7 @@ from __future__ import print_function
 from __future__ import with_statement
 
 import argparse
+import importlib
 import os
 
 import numpy as np
@@ -23,6 +24,7 @@ from configs import cfg
 from configs import update_config
 
 from libs.datasets.collate import collect, joint_collect
+from libs.datasets.multiple_datasets import MultipleDatasets
 from libs.utils import misc
 from libs.utils.utils import create_logger
 from libs.utils.utils import get_model
@@ -74,11 +76,14 @@ def parse_args():
     return args
 
 def get_ip(ip_addr):
-    ip_list = ip_addr.split('-')[2:6]
+    # large
+    ip_list = ip_addr.split('-')[1:5]
+    # others
+    # ip_list = ip_addr.split('-')[2:6]
     for i in range(4):
         if ip_list[i][0] == '[':
             ip_list[i] = ip_list[i][1:].split(',')[0]
-    return f'tcp://{ip_list[0]}.{ip_list[1]}.{ip_list[2]}.{ip_list[3]}:1246'
+    return f'tcp://{ip_list[0]}.{ip_list[1]}.{ip_list[2]}.{ip_list[3]}:24226'
 
 def main_per_worker():
     args = parse_args()
@@ -139,6 +144,24 @@ def main_per_worker():
             find_unused_parameters=True
         )
         train_dataset, eval_dataset = get_dataset(cfg)
+         # joint dataset for debug
+        module = importlib.import_module('match_customtask')
+        Dataset = getattr(module, 'MatchCustomTaskDataset')
+        data_root = '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/data/mot17_pkl/' # abs path in yaml
+        train_root = os.path.join(data_root, 'train')
+        img_root = cfg.DATASET.PREFIX
+        from libs.datasets.transform import TrainTransform
+        train_transform = TrainTransform(
+            mean=cfg.DATASET.MEAN,
+            std=cfg.DATASET.STD,
+            scales=cfg.DATASET.SCALES,
+            max_size=cfg.DATASET.MAX_SIZE
+        )
+        mot_dataset = Dataset(train_root, img_root, train_transform,
+                istrain=True, max_obj=cfg.TRANSFORMER.NUM_QUERIES)
+        train_dataset = MultipleDatasets([train_dataset, mot_dataset], make_same_len=False)
+        print(len(train_dataset))
+
         train_sampler = torch.utils.data.distributed.DistributedSampler(
             train_dataset
         )

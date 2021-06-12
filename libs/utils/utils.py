@@ -286,6 +286,7 @@ def get_dataset(cfg, is_train=True):
             train_sub_set = Dataset(train_sub_root, img_root, train_transform,
                 istrain=True, max_obj=cfg.TRANSFORMER.NUM_QUERIES)
             train_list.append(train_sub_set)
+
         train_dataset = list_to_set(train_list, 'train')
         eval_dataset = None
     

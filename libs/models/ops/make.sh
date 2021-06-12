@@ -8,4 +8,4 @@
 # ------------------------------------------------------------------------------------------------
 # export CC=/mnt/lustre/share/gcc/gcc-7.3.0/bin/gcc
 # export CXX=/mnt/lustre/share/gcc/gcc-7.3.0/bin/g++
-python3 setup.py build install --user
+python3 setup.py build install
