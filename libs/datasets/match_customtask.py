@@ -30,8 +30,10 @@ class MatchCustomTaskDataset(Dataset):
         self.annotations = annotations
         self.ids = []
         self.max_objs = max_obj
-        id_base = 439047
-        max_id = 439046
+        # id_base = 439047
+        # max_id = 439046
+        id_base = 1
+        max_id = 0
         min_id = 10000000
         pre_mot_video = None
         pre_mot_frame = None

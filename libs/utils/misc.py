@@ -13,6 +13,7 @@ Misc functions, including distributed helpers.
 Mostly copy-paste from torchvision references.
 """
 import os
+import math
 import subprocess
 import time
 from collections import defaultdict, deque
@@ -308,9 +309,11 @@ def collate_fn(batch):
     return tuple(batch)
 
 
-def _max_by_axis(the_list):
+def _max_by_axis(the_list, divisor=64):
     # type: (List[List[int]]) -> List[int]
     maxes = the_list[0]
+    for i in range(1, len(maxes)):
+        maxes[i] = math.ceil(maxes[i] / divisor) * divisor
     for sublist in the_list[1:]:
         for index, item in enumerate(sublist):
             maxes[index] = max(maxes[index], item)

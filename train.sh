@@ -12,6 +12,6 @@
 # PARTITION=VA
 # srun --partition=$PARTITION --mpi=pmi2 -n 32 --gres=gpu:8 --ntasks-per-node=8 --job-name=MTL --kill-on-bad-exit=1 python3 tools/train.py --cfg configs/deformable_track.yaml
 PARTITION=pat_largescale
-# srun --partition=$PARTITION --mpi=pmi2 -n 12 --gres=gpu:6 --ntasks-per-node=8 --job-name=MTL --kill-on-bad-exit=1 -x BJ-IDC1-10-10-16-[83] python3 tools/train.py --cfg configs/deformable_macthtrack_ch.yaml
-srun --partition=$PARTITION --mpi=pmi2 -n 2 --gres=gpu:2 --ntasks-per-node=8 --job-name=TRAIN --kill-on-bad-exit=1  python3 tools/train.py --cfg configs/deformable_macthtrack_ch.yaml
+# srun --partition=$PARTITION --mpi=pmi2 -n 12 --gres=gpu:6 --ntasks-per-node=8 --job-name=MTL --kill-on-bad-exit=1 python3 tools/train.py --cfg configs/deformable_track.yaml
+srun --partition=$PARTITION --mpi=pmi2 -n 2 --gres=gpu:2 --ntasks-per-node=8 --job-name=TRAIN --kill-on-bad-exit=1  python3 tools/train.py --cfg configs/YOLOv5m_matchtrack.yaml
 

@@ -86,11 +86,11 @@ class DeformableMatchTrack(nn.Module):
         self.id_embed =  MLP(hidden_dim, hidden_dim, emb_dim, 3)
         self.nID = dataset_nids
         self.emb_dim = emb_dim
-        self.id_head = nn.Linear(self.emb_dim, self.nID)
-        nn.init.normal_(self.id_head.weight, std=0.01)
+        self.light_id_head = nn.Linear(self.emb_dim, self.nID)
+        nn.init.normal_(self.light_id_head.weight, std=0.01)
         prior_prob = 0.01
         bias_value = -math.log((1 - prior_prob) / prior_prob)
-        nn.init.constant_(self.id_head.bias, bias_value)
+        nn.init.constant_(self.light_id_head.bias, bias_value)
         self.emb_scale = math.sqrt(2) * math.log(self.nID - 1)
         # self.offset_embed = MLP(hidden_dim, hidden_dim, 2, 3)
         ##########################
@@ -221,7 +221,7 @@ class DeformableMatchTrack(nn.Module):
             # ref_id_embed = self.ref_id_embed(match_hs)
             # ref_id_feature = ref_id_embed.clone()
             # ref_id_embed = self.emb_scale * F.normalize(ref_id_embed)
-            # ref_id_embed = self.id_head(ref_id_embed.contiguous())
+            # ref_id_embed = self.light_id_head(ref_id_embed.contiguous())
             # tmp = self.ref_embed(match_hs)
             # tmp += ref_boxes
             # ref_coords = tmp.sigmoid()
@@ -237,7 +237,7 @@ class DeformableMatchTrack(nn.Module):
                     ref_id_embed = self.ref_id_embed(match_hs[lvl])
                     ref_id_feature = ref_id_embed.clone()
                     ref_id_embed = self.emb_scale * F.normalize(ref_id_embed)
-                    ref_id_embed = self.id_head(ref_id_embed.contiguous())
+                    ref_id_embed = self.light_id_head(ref_id_embed.contiguous())
                 tmp = self.ref_embed[lvl](match_hs[lvl])
                 tmp += reference
                 ref_coords.append(tmp.sigmoid())
@@ -259,7 +259,7 @@ class DeformableMatchTrack(nn.Module):
                 outputs_id_embed = self.id_embed(hs[lvl])
                 outputs_id_features.append(outputs_id_embed.clone())
                 outputs_id_embed = self.emb_scale * F.normalize(outputs_id_embed)
-                outputs_id_embed = self.id_head(outputs_id_embed.contiguous())
+                outputs_id_embed = self.light_id_head(outputs_id_embed.contiguous())
                 outputs_id_embeds.append(outputs_id_embed)
             # next_center_tmp = self.offset_embed[lvl](hs[lvl])
             ##########################
@@ -437,21 +437,24 @@ class SetCriterion(nn.Module):
             losses['loss_offset'] = torch.Tensor([0.]).mean().to(device)
             losses['aux_loss_offset_0'] = torch.Tensor([0.]).mean().to(device)
             losses['aux_loss_offset_1'] = torch.Tensor([0.]).mean().to(device)
-            # losses['match_loss_ids'] = torch.Tensor([0.]).mean().to(device)
             return losses
 
         target_next_centers = torch.cat([t['gt_ref_boxes'][..., :2] for t in targets], dim=0)
         src_next_centers = outputs['ref_outputs']['ref_coords'].flatten(0, 1)
+        target_ids = torch.cat([t['gt_ref_ids'] for t in targets], dim=0).long()
+        valids_ids = torch.where(target_ids>-1)[0]
+        if len(valids_ids) == 0:
+            flag = 0.0
+        else:
+            flag = 1.0
         loss_offset = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
-        losses['loss_offset'] = loss_offset.sum() / num_boxes
+        losses['loss_offset'] = loss_offset.sum() / num_boxes * flag
         aux_outputs = outputs['aux_ref_outputs']
         for i, aux_output in enumerate(aux_outputs):
             src_next_centers = aux_output['ref_coords'].flatten(0, 1)
             loss_offset = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
-            losses[f'aux_loss_offset_{i}'] = loss_offset.sum() / num_boxes
+            losses[f'aux_loss_offset_{i}'] = loss_offset.sum() / num_boxes * flag
         # id
-        target_ids = torch.cat([t['gt_ref_ids'] for t in targets], dim=0).long()
-        valids_ids = torch.where(target_ids>-1)[0]
         target_ids = target_ids[valids_ids]
         outputs_src_id_logits = outputs['ref_outputs']['ref_id_embeds'].flatten(0, 1)
         outputs_src_id_logits = outputs_src_id_logits[valids_ids].contiguous()

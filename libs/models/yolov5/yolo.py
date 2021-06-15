@@ -9,11 +9,11 @@ import sys
 from copy import deepcopy
 from pathlib import Path
 
-from common import *
-from experimental import *
-from utils.autoanchor import check_anchor_order
-from utils.general import make_divisible, check_file, set_logging
-from utils.torch_utils import time_synchronized, fuse_conv_and_bn, model_info, scale_img, initialize_weights, \
+from libs.models.yolov5.common import *
+from libs.models.yolov5.experimental import *
+from libs.models.yolov5.utils.autoanchor import check_anchor_order
+from libs.models.yolov5.utils.general import make_divisible, check_file, set_logging
+from libs.models.yolov5.utils.torch_utils import time_synchronized, fuse_conv_and_bn, model_info, scale_img, initialize_weights, \
     select_device, copy_attr
 
 try:
@@ -102,7 +102,7 @@ class Model(nn.Module):
         if isinstance(m, Detect):
             s = 256  # 2x min stride
             m.inplace = self.inplace
-            m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))])  # forward
+            m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))[1]])  # forward
             m.anchors /= m.stride.view(-1, 1, 1)
             check_anchor_order(m)
             self.stride = m.stride
@@ -148,7 +148,6 @@ class Model(nn.Module):
                 if m == self.model[0]:
                     logger.info(f"{'time (ms)':>10s} {'GFLOPs':>10s} {'params':>10s}  {'module'}")
                 logger.info(f'{dt[-1]:10.2f} {o:10.2f} {m.np:10.0f}  {m.type}')
-
             x = m(x)  # run
             y.append(x if m.i in self.save else None)  # save output
 

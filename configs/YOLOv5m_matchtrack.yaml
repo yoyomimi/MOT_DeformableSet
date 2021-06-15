@@ -11,15 +11,15 @@ DATASET:
   STD: [0.229, 0.224, 0.225]
   IMG_NUM_PER_GPU: 1
   NUM_CLASSES: 2 # id 加 1
-  MAX_SIZE: 1920 #1333
-  SCALES: [1080,]
+  MAX_SIZE: 1920 #1920
+  SCALES: [1088,] #[1088,]
   PREFIX: '/mnt/lustre/chenmingfei/data/MOT_data/'
 MODEL:
   FILE: yolo_match
   NAME: YOLOv5Match
-  MODEL_CONFIG: 'configs/YOLOv5_configs/yolov5m.yaml'
+  MODEL_CONFIG: 'configs/YOLOv5_configs/yolov5m6.yaml'
   # RESUME_PATH: 'data/r50_deformable_detr-checkpoint.pth'
-  RESUME_PATH: 'data/yolov5m.pt'
+  RESUME_PATH: 'data/yolov5m6.pt'
 DEFORMABLE:
   WITH_BOX_REFINE: True
   TWO_STAGE: True
@@ -32,7 +32,7 @@ TRANSFORMER:
   DIM_FEEDFORWARD: 1024
   DROPOUT: 0.1
   NHEADS: 8
-  NUM_QUERIES: 300
+  NUM_QUERIES: 150
   DEC_N_POINTS: 4
   ENC_N_POINTS: 4
   PRE_NORM: False
@@ -50,19 +50,21 @@ LOSS:
   GIOU_LOSS_COEF: 2
   FOCAL_ALPHA: 0.25
 TRAINER:
-  FILE: det_trainer
+  FILE: yolov5_trainer
   NAME: TrackTrainer
 TRAIN:
-  HYP_CONFIG = 'configs/YOLOv5_configs/hyp.yaml'
-  LR: 0.0032
+  HYP_CONFIG: 'configs/YOLOv5_configs/hyp.yaml'
+  LR: 0.0001
   LR_BACKBONE: 0.00001
   LR_BACKBONE_NAMES: ["backbone.0"]
   LR_PROJ_MULT: 0.1
   LR_PROJ_NAMES: ['reference_points', 'sampling_offsets']
-  MOMENTUM: 0.843
-  WEIGHT_DECAY: 0.00036
+  MOMENTUM: 0.9
+  WEIGHT_DECAY: 0.0001
   LR_DROP: 40 #40
   MAX_EPOCH: 50 #50
+  # LR_DROP: 20
+  # MAX_EPOCH: 30
   PRINT_FREQ: 20
   SAVE_INTERVAL: 5 #5
   SAVE_EVERY_CHECKPOINT: True

@@ -1,23 +1,26 @@
-OUTPUT_ROOT: deformable_track_train
+OUTPUT_ROOT: matchtrack_nomatch_layer6_joint_scratch
 DIST_BACKEND: 'nccl'
 WORKERS: 4
 DEVICE: cuda
 SEED: 42
 DATASET:
-  FILE: basetrack
-  NAME: BaseTrackDataset
-  ROOT: 'data/MOT17'
+  FILE: match_ch
+  NAME: MatchCHDataset
+  ROOT: '/mnt/lustre/chenmingfei/code/MOT_DeformableSet/data/mot_pkl/'
   MEAN: [0.485, 0.456, 0.406]
   STD: [0.229, 0.224, 0.225]
   IMG_NUM_PER_GPU: 1
   NUM_CLASSES: 2 # id 加 1
-  MAX_SIZE: 1333 #1333
-  SCALES: [608, 640, 672, 704, 736, 768, 800]
-  PREFIX: ''
+  MAX_SIZE: 1920 #1333
+  SCALES: [1080,]
+  PREFIX: '/mnt/lustre/chenmingfei/data/MOT_data/'
 MODEL:
-  FILE: deformable_track
-  NAME: DeformableTrack
-  RESUME_PATH: 'output/deformable_track_DeformableTrack_epoch012_checkpoint.pth'
+  FILE: deformable_matchtrack_load
+  # FILE: deformable_matchtrack
+  NAME: DeformableMatchTrack
+  # RESUME_PATH: 'data/r50_deformable_detr-checkpoint.pth'
+  RESUME_PATH: 'data/r50_deformable_detr_plus_iterative_bbox_refinement_plus_plus_two_stage-checkpoint.pth'
+  # RESUME_PATH: 'output/matchtrack_15_ch_6w_layer6_joint_DeformableMatchTrack_epoch020_checkpoint.pth'
 BACKBONE:
   NAME: resnet50
   DIALATION: False
@@ -54,17 +57,19 @@ TRAINER:
   FILE: det_trainer
   NAME: TrackTrainer
 TRAIN:
-  LR: 0.00001
+  LR: 0.0001
   LR_BACKBONE: 0.00001
   LR_BACKBONE_NAMES: ["backbone.0"]
   LR_PROJ_MULT: 0.1
   LR_PROJ_NAMES: ['reference_points', 'sampling_offsets']
   MOMENTUM: 0.9
   WEIGHT_DECAY: 0.0001
-  LR_DROP: 10 #40
-  MAX_EPOCH: 15 #50
-  PRINT_FREQ: 5 #20
-  SAVE_INTERVAL: 1 #5
+  LR_DROP: 40 #40
+  MAX_EPOCH: 50 #50
+  # LR_DROP: 20
+  # MAX_EPOCH: 30
+  PRINT_FREQ: 20
+  SAVE_INTERVAL: 5 #5
   SAVE_EVERY_CHECKPOINT: True
   VAL_WHEN_TRAIN: False
   CLIP_MAX_NORM: 0.1

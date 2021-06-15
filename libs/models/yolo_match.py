@@ -16,57 +16,26 @@ from torch import nn
 import math
 import yaml
 
+from libs.models.yolov5.utils.general import xyxy2xywh, non_max_suppression
+from libs.models.yolov5.utils.loss import ComputeLoss, sigmoid_focal_loss
+from libs.models.yolov5.yolo import Model as YOLOv5
+from libs.models.matcher import build_detmatcher, build_matchtrack_matcher
+from libs.models.position_encoding import build_position_encoding
+from libs.models.reference_search import build_refersearch
 from libs.utils import box_ops
 from libs.utils.misc import (NestedTensor, nested_tensor_from_tensor_list,
                        accuracy, get_world_size, interpolate,
                        is_dist_avail_and_initialized, inverse_sigmoid)
-
-from libs.models.yolov5.utils.loss import ComputeLoss
-from libs.models.yolov5.utils.Model as YOLOv5
-from libs.models.matcher import build_matcher, build_matchtrack_matcher
-from libs.models.position_encoding import build_position_encoding
-from libs.models.reference_search import build_refersearch
 import copy
 
 
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
-def sigmoid_focal_loss(inputs, targets, num_boxes=None, reduction='mean', alpha: float = 0.25, gamma: float = 2,):
-    """
-    Loss used in RetinaNet for dense detection: https://arxiv.org/abs/1708.02002.
-    Args:
-        inputs: A float tensor of arbitrary shape.
-                The predictions for each example.
-        targets: A float tensor with the same shape as inputs. Stores the binary
-                 classification label for each element in inputs
-                (0 for the negative class and 1 for the positive class).
-        alpha: (optional) Weighting factor in range (0,1) to balance
-                positive vs negative examples. Default = -1 (no weighting).
-        gamma: Exponent of the modulating factor (1 - p_t) to
-               balance easy vs hard examples.
-    Returns:
-        Loss tensor
-    """
-    prob = inputs.sigmoid()
-    ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
-    p_t = prob * targets + (1 - prob) * (1 - targets)
-    loss = ce_loss * ((1 - p_t) ** gamma)
-
-    if alpha >= 0:
-        alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
-        loss = alpha_t * loss
-    if reduction == 'mean':
-        return loss.mean(1).sum() / num_boxes
-    elif reduction == 'sum':
-        return loss.sum()
-    else:
-        return loss.sum()
-
 
 class YOLOv5Match(nn.Module):
     def __init__(self, detector, transformer, position_embedding, num_classes, num_queries,
-                 num_feature_levels=3, emb_dim=64, dataset_nids=439823, aux_loss=True,
+                 num_feature_levels=3, emb_dim=64, dataset_nids=777, aux_loss=True,
                  num_match_decoder_layers=6):
         # ch: 439046 14687 60000 776 2324 897 757
         """ Initializes the model.
@@ -83,8 +52,10 @@ class YOLOv5Match(nn.Module):
         self.detector = detector
         self.position_embedding = position_embedding
         self.transformer = transformer
+        self.dataset_nids = dataset_nids
         hidden_dim = transformer.d_model
-        self.id_embed =  MLP(hidden_dim, hidden_dim, emb_dim, 3)
+        self.id_embed = nn.ModuleList(MLP(x, hidden_dim, emb_dim, 3)
+             for x in self.detector.model[-1].ch)
         self.nID = dataset_nids
         self.emb_dim = emb_dim
         self.id_head = nn.Linear(self.emb_dim, self.nID)
@@ -122,9 +93,6 @@ class YOLOv5Match(nn.Module):
         for proj in self.input_proj:
             nn.init.xavier_uniform_(proj[0].weight, gain=1)
             nn.init.constant_(proj[0].bias, 0)
-
-        # if two-stage, the last class_embed and det_bbox_embed is for region proposal generation
-        num_pred = (transformer.decoder.num_layers + 1) if two_stage else transformer.decoder.num_layers
         
         # match
         self.ref_embed = MLP(hidden_dim, hidden_dim, 2, 3)
@@ -132,7 +100,7 @@ class YOLOv5Match(nn.Module):
         nn.init.constant_(self.ref_embed.layers[-1].bias.data, 0)
         self.ref_embed = _get_clones(self.ref_embed, num_match_decoder_layers)
         nn.init.constant_(self.ref_embed[0].layers[-1].bias.data[2:], -2.0)
-        self.ref_id_embed = copy.deepcopy(self.id_embed)
+        self.ref_id_embed = MLP(hidden_dim, hidden_dim, emb_dim, 3)
 
     def forward(self, samples: NestedTensor, references=None):
         """ The forward expects a NestedTensor, which consists of:
@@ -152,12 +120,12 @@ class YOLOv5Match(nn.Module):
             samples = nested_tensor_from_tensor_list(samples)
         xs, det_preds = self.detector(samples.tensors)
         features, pos = [], []
-        import pdb; pdb.set_trace()
         for x in xs:
             m = samples.mask
             assert m is not None
             mask = F.interpolate(m[None].float(), size=x.shape[-2:]).to(torch.bool)[0]
-            features.append(NestedTensor(x, mask))
+            x = NestedTensor(x, mask)
+            features.append(x)
             pos.append(self.position_embedding(x).to(x.tensors.dtype))
         srcs = []
         masks = []
@@ -180,16 +148,14 @@ class YOLOv5Match(nn.Module):
                 masks.append(mask)
                 pos.append(pos_l)
 
-        query_embeds = None
-        if not self.two_stage:
-            query_embeds = self.query_embed.weight
-        memory, match_hs, match_inter_references = self.transformer(
-            srcs, masks, pos, query_embeds, references=references)
-        self.out_memory = memory
+        self.out_memory = srcs
 
-        if references is not None and match_hs is not None:
+        if references is not None:
+            query_embeds = None
+            match_hs, match_inter_references = self.transformer(
+                srcs, masks, pos, query_embeds, references=references)
             ref_coords = []
-            ref_boxes = torch.cat([v["ref_boxes"] for v in references])
+            ref_boxes = torch.stack([v["ref_boxes"] for v in references], dim=0)
             for lvl in range(match_hs.shape[0]):
                 if lvl == 0:
                     reference = ref_boxes[..., :2]
@@ -204,74 +170,66 @@ class YOLOv5Match(nn.Module):
                 tmp = self.ref_embed[lvl](match_hs[lvl])
                 tmp += reference
                 ref_coords.append(tmp.sigmoid())
-
+        else:
+            match_hs = None
 
         outputs_classes = []
         outputs_coords = []
         outputs_id_embeds = []
         outputs_id_features = []
         outputs_next_centers = []
+
+        z = []
         grid = [torch.zeros(1)] * len(det_preds)
-        for lvl in range(len(det_preds)):
-            if grid[lvl].shape[2:4] != x[i].shape[2:4] or self.onnx_dynamic:
-                    self.grid[i] = self._make_grid(nx, ny).to(x[i].device)
-            # 变坐标
-            # id得分+loc得分+cls得分决定和哪一个之前的gt匹配，trainer match这块保持一致
-            # topk + src_padding_mask 生成，query为150-300，可以batch操作
-            # target解析 [img在batch中的index, 1, cx, cy, w, h]
-            # 检测的id loss单独算，方便未来的解耦合
+        ori_det_preds = det_preds.copy()
+        for i in range(len(det_preds)):
+            bs, _, ny, nx, _ = det_preds[i].shape
+            yv, xv = torch.meshgrid([torch.arange(ny), torch.arange(nx)])
+            grid[i] = torch.stack((xv, yv), 2).view((
+                1, 1, ny, nx, 2)).float().to(det_preds[i].device)
+            y = det_preds[i].sigmoid()
+            y[..., 0:2] = (y[..., 0:2] * 2. - 0.5 + grid[i]) * self.detector.model[
+                -1].stride[i]  # xy
+            y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.detector.model[
+                -1].anchor_grid[i]  # wh
+            outputs_id_embed = self.id_embed[i](xs[i].permute(0,2,3,1).unsqueeze(1).repeat(
+                1, self.detector.model[-1].na, 1, 1, 1))
+            outputs_id_features.append(outputs_id_embed.contiguous().view(bs, -1, self.emb_dim))
+            outputs_id_embed = self.emb_scale * F.normalize(outputs_id_embed)
+            outputs_id_embed = self.id_head(outputs_id_embed)
+            outputs_id_embeds.append(outputs_id_embed)
+            z.append(y.view(bs, -1, self.detector.model[-1].no))
             
-                y = x[i].sigmoid()
-                if self.inplace:
-                    y[..., 0:2] = (y[..., 0:2] * 2. - 0.5 + self.grid[i]) * self.stride[i]  # xy
-                    y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh
-                else:  # for YOLOv5 on AWS Inferentia https://github.com/ultralytics/yolov5/pull/2953
-                    xy = (y[..., 0:2] * 2. - 0.5 + self.grid[i]) * self.stride[i]  # xy
-                    wh = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i].view(1, self.na, 1, 1, 2)  # wh
-                    y = torch.cat((xy, wh, y[..., 4:]), -1)
-                z.append(y.view(bs, -1, self.no))
+        out = torch.cat(z, 1)
+        outputs_id_features = torch.cat(outputs_id_features, 1)
+        final_out_preds, final_id_features = non_max_suppression(
+            out, 0.05, 0.45, max_det=self.num_queries, addict=outputs_id_features)
+        self.outputs_coords = []
+        self.out_id_features = []
+        self.out_probs = []
 
-            outputs_class = det_preds[lvl]
-            ###### modified ##########
-            if lvl == hs.shape[0] - 1:
-                outputs_id_embed = self.id_embed(hs[lvl])
-                outputs_id_features.append(outputs_id_embed.clone())
-                outputs_id_embed = self.emb_scale * F.normalize(outputs_id_embed)
-                outputs_id_embed = self.id_head(outputs_id_embed.contiguous())
-                outputs_id_embeds.append(outputs_id_embed)
-            # next_center_tmp = self.offset_embed[lvl](hs[lvl])
-            ##########################
-            tmp = self.det_bbox_embed[lvl](hs[lvl])
+        for i in range(len(final_out_preds)):
+            coord = torch.zeros(self.num_queries, 4).to(out.device)
+            prob = torch.zeros(self.num_queries, 1).to(out.device)
+            id_embs = torch.zeros(self.num_queries, self.emb_dim).to(out.device)
+            id_features = torch.zeros(self.num_queries, self.emb_dim).to(out.device)
+            ref_num = len(final_out_preds[i])
+            coord[:ref_num] = xyxy2xywh(final_out_preds[i][..., :4].view(-1, 4))
+            prob[:ref_num] = final_out_preds[i][..., 4].view(-1, 1)
+            id_features[:ref_num] = final_id_features[i]
+            self.outputs_coords.append(coord)
+            self.out_probs.append(prob)
+            self.out_id_features.append(id_features)
+        
+        self.outputs_coords = torch.stack(self.outputs_coords)
+        self.out_probs = torch.stack(self.out_probs)
+        self.out_id_features = torch.stack(self.out_id_features)
 
-            if reference.shape[-1] > 2:
-                tmp += reference
-                # next_center_tmp += reference[..., :2]
-            else:
-                assert reference.shape[-1] == 2
-                tmp[..., :2] += reference
-                # next_center_tmp += reference
-            coord = tmp.sigmoid()
-            self.out_pred_boxes = coord
-            coord_cxcy = coord[..., :2]-coord[..., 2:4] + 0.5 * (coord[..., 2:4]+coord[..., 4:])
-            outputs_coord = torch.cat([coord_cxcy, coord[..., 2:4]+coord[..., 4:]], dim=-1)
-
-            outputs_classes.append(outputs_class)
-            outputs_coords.append(outputs_coord)
-
-        outputs_class = torch.stack(outputs_classes)
-        outputs_coord = torch.stack(outputs_coords)
-        outputs_id_embed = outputs_id_embeds[-1]
-        outputs_id_features = outputs_id_features[-1]
-        self.out_prob = outputs_class[-1].sigmoid()[..., 1]
-        self.out_id_features = outputs_id_features
-
-        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1],
-               'id_embeds': outputs_id_embed, 'id_features': outputs_id_features,
-               'out_pred_boxes': self.out_pred_boxes, 'det_out': det_preds
+        out = {'pred_logits': self.out_probs, 'pred_boxes': self.outputs_coords,
+               'id_embeds': outputs_id_embeds, 'id_features': outputs_id_features,
+               'det_out': ori_det_preds
                }
-        if self.aux_loss:
-            out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
-    
+
         if references is not None and match_hs is not None:
             out['ref_outputs'] = {'ref_coords': ref_coords[-1],
                'ref_id_embeds': ref_id_embed, 'ref_id_features': ref_id_feature}
@@ -311,48 +269,46 @@ class SetCriterion(nn.Module):
         self.focal_alpha = focal_alpha
         self.refer_matcher = refer_matcher
 
-    def loss_boxes(self, outputs, targets, indices, num_boxes, log=True, is_next=False):
+    def loss_boxes(self, outputs, targets, num_boxes, log=True, is_next=False):
         """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
            targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
            The target boxes are expected in format (center_x, center_y, h, w), normalized by the image size.
         """
         assert 'pred_boxes' in outputs
         losses = {}
-        idx = self._get_src_permutation_idx(indices)
-        src_boxes = outputs['pred_boxes'][idx]
-        ###### modified ##########
+        det_preds = outputs['det_out']
+        outputs_id_embeds = outputs['id_embeds']
+        cat_targets = []
         if is_next is True:
-            target_boxes = torch.cat([t['next_boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
-            target_ids = torch.cat([t['next_ids'][i] for t, (_, i) in zip(targets, indices)], dim=0).long()
+            for i, t in enumerate(targets):
+                target = torch.zeros(t['next_boxes'].shape[0], 7).to(det_preds[0].device)
+                target[..., 0] = i
+                target[..., 1] = t['next_labels']
+                target[..., 2:6] = t['next_boxes']
+                target[..., 6] = t['next_ids']
+                cat_targets.append(target)
         else:
-            target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
-            target_ids = torch.cat([t['ids'][i] for t, (_, i) in zip(targets, indices)], dim=0).long()
-        if 'id_embeds' in outputs:
-            valids_ids = torch.where(target_ids>-1)[0]
-            target_ids = target_ids[valids_ids]
-            outputs_src_id_logits = outputs['id_embeds'][idx][valids_ids].contiguous()
-            # loss_ids = F.cross_entropy(outputs_src_id_logits, target_ids, ignore_index=-1)
-            target_ids_onehot = torch.zeros([outputs_src_id_logits.shape[0], outputs_src_id_logits.shape[1] + 1],
-                                                dtype=outputs_src_id_logits.dtype, layout=outputs_src_id_logits.layout, device=outputs_src_id_logits.device)
-            target_ids_onehot.scatter_(1, target_ids.unsqueeze(-1), 1)
+            for i, t in enumerate(targets):
+                target = torch.zeros(t['boxes'].shape[0], 7).to(det_preds[0].device)
+                target[..., 0] = i
+                target[..., 1] = t['labels']
+                target[..., 2:6] = t['boxes']
+                target[..., 6] = t['ids']
+                cat_targets.append(target)
 
-            target_ids_onehot = target_ids_onehot[:,:-1]
-            loss_ids = sigmoid_focal_loss(outputs_src_id_logits, target_ids_onehot, reduction='sum', alpha=self.focal_alpha, gamma=2) / max(1, outputs_src_id_logits.shape[0])
-            if log:
-                # TODO this should probably be a separate loss, not hacked in this one here
-                losses['id_class_error'] = 100 - accuracy(outputs_src_id_logits, target_ids)[0]
-            losses['loss_ids'] = loss_ids
-        ##########################
-        loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
-        losses['loss_bbox'] = loss_bbox.sum() / num_boxes
+        cat_targets = torch.cat(cat_targets, dim=0)
+        lbox, lobj, _, lids = self.det_loss([det_preds, outputs_id_embeds], cat_targets)
+        lbox /= num_boxes
+        lids /= num_boxes
+        lobj /= len(det_preds)
+        losses = {
+            'loss_ce': lobj, 'loss_bbox': lbox,
+            'loss_ids': lids
+        }
 
-        loss_giou = 1 - torch.diag(box_ops.generalized_box_iou(
-            box_ops.box_cxcywh_to_xyxy(src_boxes),
-            box_ops.box_cxcywh_to_xyxy(target_boxes)))
-        losses['loss_giou'] = loss_giou.sum() / num_boxes
         return losses
 
-    def loss_match(self, outputs, targets, indices, num_boxes, log=True, is_next=False):
+    def loss_match(self, outputs, targets, indices, num_boxes, q_padding_mask=None, log=True, is_next=False):
         assert is_next is True
         losses = {}
         if 'ref_outputs' not in outputs:
@@ -360,23 +316,33 @@ class SetCriterion(nn.Module):
             losses['loss_offset'] = torch.Tensor([0.]).mean().to(device)
             losses['aux_loss_offset_0'] = torch.Tensor([0.]).mean().to(device)
             losses['aux_loss_offset_1'] = torch.Tensor([0.]).mean().to(device)
-            # losses['match_loss_ids'] = torch.Tensor([0.]).mean().to(device)
+            losses['aux_loss_offset_2'] = torch.Tensor([0.]).mean().to(device)
+            losses['aux_loss_offset_3'] = torch.Tensor([0.]).mean().to(device)
+            losses['aux_loss_offset_4'] = torch.Tensor([0.]).mean().to(device)
             return losses
 
-        target_next_centers = torch.cat([t['gt_ref_boxes'][..., :2] for t in targets], dim=0)
-        src_next_centers = outputs['ref_outputs']['ref_coords'].flatten(0, 1)
-        loss_offset = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
-        losses['loss_offset'] = loss_offset.sum() / num_boxes
-        aux_outputs = outputs['aux_ref_outputs']
-        for i, aux_output in enumerate(aux_outputs):
-            src_next_centers = aux_output['ref_coords'].flatten(0, 1)
-            loss_offset = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
-            losses[f'aux_loss_offset_{i}'] = loss_offset.sum() / num_boxes
-        # id
         target_ids = torch.cat([t['gt_ref_ids'] for t in targets], dim=0).long()
         valids_ids = torch.where(target_ids>-1)[0]
+        if len(valids_ids) == 0:
+            flag = 0.0
+        else:
+            flag = 1.0
+        target_next_centers = torch.cat([t['gt_ref_boxes'][..., :2] for t in targets], dim=0)
+        src_next_centers = torch.cat([coord[~q_padding_mask[i]] for i, coord in enumerate(
+            outputs['ref_outputs']['ref_coords'])], dim=0)
+        loss_offset = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
+        losses['loss_offset'] = loss_offset.sum() / num_boxes * flag
+        aux_outputs = outputs['aux_ref_outputs']
+        for i, aux_output in enumerate(aux_outputs):
+            src_next_centers = torch.cat([coord[~q_padding_mask[i]] for i, coord in enumerate(
+                aux_output['ref_coords'])], dim=0)
+            loss_offset = F.l1_loss(src_next_centers, target_next_centers, reduction='none')
+            losses[f'aux_loss_offset_{i}'] = loss_offset.sum() / num_boxes * flag
+
+        # id
         target_ids = target_ids[valids_ids]
-        outputs_src_id_logits = outputs['ref_outputs']['ref_id_embeds'].flatten(0, 1)
+        outputs_src_id_logits = torch.cat([ref_id_emb[~q_padding_mask[i]] for i, ref_id_emb in enumerate(
+            outputs['ref_outputs']['ref_id_embeds'])], dim=0)
         outputs_src_id_logits = outputs_src_id_logits[valids_ids].contiguous()
         # loss_ids = F.cross_entropy(outputs_src_id_logits, target_ids, ignore_index=-1)
         target_ids_onehot = torch.zeros([outputs_src_id_logits.shape[0], outputs_src_id_logits.shape[1] + 1],
@@ -384,16 +350,19 @@ class SetCriterion(nn.Module):
         target_ids_onehot.scatter_(1, target_ids.unsqueeze(-1), 1)
 
         target_ids_onehot = target_ids_onehot[:,:-1]
-        loss_ids = sigmoid_focal_loss(outputs_src_id_logits, target_ids_onehot, reduction='sum', alpha=self.focal_alpha, gamma=2) / max(1, outputs_src_id_logits.shape[0])
+        loss_ids = sigmoid_focal_loss(outputs_src_id_logits, target_ids_onehot, reduction='sum', alpha=self.focal_alpha, gamma=2) / max(
+            1, outputs_src_id_logits.shape[0])
+        if log:
+            losses['id_class_error'] = 100 - accuracy(outputs_src_id_logits, target_ids)[0]
         losses['match_loss_ids'] = loss_ids
         return losses
         
-    def get_loss(self, loss, outputs, targets, indices, num_boxes, **kwargs):
+    def get_loss(self, loss, outputs, targets, num_boxes, **kwargs):
         loss_map = {
             'boxes': self.loss_boxes,
         }
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
-        return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
+        return loss_map[loss](outputs, targets, num_boxes, **kwargs)
 
     def forward(self, outputs, targets, is_next=False, references=None):
         """ This performs the loss computation.
@@ -409,11 +378,6 @@ class SetCriterion(nn.Module):
                 "idx_map": Tensor of dim [num_refer_boxes, num_targets], map the refer index to the target index
         """
         outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs' and k != 'enc_outputs' and k != 'ref_outputs' and k != 'aux_ref_outputs'}
-        # if references is not None and 'ref_outputs' in outputs:
-        #     ref_outputs = outputs['ref_outputs']
-        #     ori_indices, ref_indices = self.refer_matcher(ref_outputs, outputs_without_aux, references)
-        # else:
-        #     ref_indices = None
         # Retrieve the matching between the outputs of the last layer and the targets
         ref_indices = None
         indices = self.matcher(outputs_without_aux, targets, ref_indices, is_next)
@@ -433,40 +397,8 @@ class SetCriterion(nn.Module):
         for loss in self.losses:
             kwargs = {}
             kwargs['is_next'] = is_next
-            losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes, **kwargs))
+            losses.update(self.get_loss(loss, outputs, targets, num_boxes, **kwargs))
 
-        # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
-        if 'aux_outputs' in outputs:
-            for i, aux_outputs in enumerate(outputs['aux_outputs']):
-                indices = self.matcher(aux_outputs, targets, ref_indices, is_next)
-                for loss in self.losses:
-                    kwargs = {}
-                    kwargs['is_next'] = is_next
-                    if loss == 'labels':
-                        # Logging is enabled only for the last layer
-                        kwargs['log'] = False
-                    l_dict = self.get_loss(loss, aux_outputs, targets, indices, num_boxes, **kwargs)
-                    l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
-                    losses.update(l_dict)
-
-        if 'enc_outputs' in outputs:
-            enc_outputs = outputs['enc_outputs']
-            bin_targets = copy.deepcopy(targets)
-            for bt in bin_targets:
-                if is_next is True:
-                    bt['next_labels'] = torch.zeros_like(bt['next_labels'])
-                else:
-                    bt['labels'] = torch.zeros_like(bt['labels'])
-            indices = self.matcher(enc_outputs, bin_targets, None, is_next)
-            for loss in self.losses:
-                kwargs = {}
-                kwargs['is_next'] = is_next
-                if loss == 'labels':
-                    # Logging is enabled only for the last layer
-                    kwargs['log'] = False
-                l_dict = self.get_loss(loss, enc_outputs, bin_targets, indices, num_boxes, **kwargs)
-                l_dict = {k + f'_enc': v for k, v in l_dict.items()}
-                losses.update(l_dict)
         # ref outputs
         if is_next is True:
             # regression loss for ref outputs
@@ -478,7 +410,8 @@ class SetCriterion(nn.Module):
                 if is_dist_avail_and_initialized():
                     torch.distributed.all_reduce(ref_num_boxes)
                 ref_num_boxes = torch.clamp(ref_num_boxes / get_world_size(), min=1).item()
-            losses.update(self.loss_match(outputs, references, None, ref_num_boxes, is_next=is_next))
+                q_padding_mask = torch.stack([r["padding_mask"] for r in references], dim=0)
+            losses.update(self.loss_match(outputs, references, None, ref_num_boxes, q_padding_mask, is_next=is_next))
 
         return losses
 
@@ -501,7 +434,6 @@ class PostProcess(nn.Module):
         """
         out_logits, out_bbox = outputs['pred_logits'], outputs['pred_boxes']
         id_features = outputs['id_features']
-        out_pred_boxes = outputs['out_pred_boxes']
 
         assert len(out_logits) == len(target_sizes)
         assert target_sizes.shape[1] == 2
@@ -520,7 +452,7 @@ class PostProcess(nn.Module):
                 track_idx[sid] = tid
             ref_coords = ref_outputs['ref_coords']
             ref_id_features = ref_outputs['ref_id_features']
-        prob = out_logits.sigmoid()
+        prob = out_logits
         topk_values, topk_indexes = torch.topk(prob.view(out_logits.shape[0], -1), 100, dim=1)
         scores = topk_values
         topk_boxes = topk_indexes // out_logits.shape[2]
@@ -529,16 +461,10 @@ class PostProcess(nn.Module):
         boxes = torch.gather(boxes, 1, topk_boxes.unsqueeze(-1).repeat(1,1,4))
         boxes = boxes * scale_fct[:, None, :]
 
-        out_pred_boxes = torch.gather(out_pred_boxes, 1, topk_boxes.unsqueeze(-1).repeat(1,1,out_pred_boxes.shape[-1]))
-        scale_fct_6d = torch.stack([img_w, img_h, img_w, img_h, img_w, img_h], dim=1)
-        out_pred_boxes = out_pred_boxes * scale_fct_6d[:, None, :]
-        # boxes = torch.cat([out_pred_boxes[..., :2]-out_pred_boxes[..., 2:4], out_pred_boxes[
-        #     ..., :2]+out_pred_boxes[..., 4:]], dim=-1)
-
         filenames = [filename] * len(scores)
         results = [{'filename': f, 'scores': s, 'labels': l, 'boxes': b} for f, s, l, b in zip(
             filenames, scores, labels, boxes)]
-        results[-1]['out_pred_boxes'] = out_pred_boxes
+        results[-1]['out_pred_boxes'] = boxes[-1]
         results[-1]['id_features'] = id_features.reshape(-1, id_features.shape[
             -1])[topk_boxes[0]]
         results[-1]['track_idx'] = track_idx[topk_boxes[0]]
@@ -567,10 +493,10 @@ class MLP(nn.Module):
 def build_model(cfg, device):
     num_classes = cfg.DATASET.NUM_CLASSES
 
-    detector = YOLOv5(cfg.MODEL_CONFIG)
+    detector = YOLOv5(cfg.MODEL.MODEL_CONFIG)
     with open(cfg.TRAIN.HYP_CONFIG) as f:
         hyp = yaml.safe_load(f)
-    nl = detector.detector[-1].nl
+    nl = detector.model[-1].nl
     imgsz = cfg.DATASET.MAX_SIZE
     nc = 1
     hyp['box'] *= 3. / nl  # scale to layers
@@ -582,21 +508,20 @@ def build_model(cfg, device):
     detector.hyp = hyp
 
     transformer = build_refersearch(cfg)
-    matcher = build_matcher(cfg)
+    matcher = build_detmatcher(cfg)
     position_embedding = build_position_encoding(cfg)
 
     ref_matcher = build_matchtrack_matcher(cfg)
     model = YOLOv5Match(
         detector,
-        position_embedding,
         transformer,
+        position_embedding,
         num_classes=num_classes,
         num_queries=cfg.TRANSFORMER.NUM_QUERIES,
         num_feature_levels=nl,
         aux_loss=cfg.LOSS.AUX_LOSS,
     )
-    weight_dict = {'loss_ce': cfg.LOSS.CLS_LOSS_COEF, 'loss_bbox': cfg.LOSS.BBOX_LOSS_COEF}
-    weight_dict['loss_giou'] = cfg.LOSS.GIOU_LOSS_COEF
+    weight_dict = {'loss_ce': 1.0, 'loss_bbox': 1.0}
     # TODO this is a hack
     if cfg.LOSS.AUX_LOSS:
         aux_weight_dict = {}
@@ -613,7 +538,7 @@ def build_model(cfg, device):
     weight_dict['match_loss_ids'] = cfg.LOSS.ID_LOSS_COEF
     weight_dict['loss_ids'] = cfg.LOSS.ID_LOSS_COEF
 
-    losses = ['labels', 'boxes', 'cardinality']
+    losses = ['boxes']
     # num_classes, matcher, weight_dict, losses, focal_alpha=0.25
     criterion = SetCriterion(detector, num_classes, matcher, weight_dict, losses, 
         focal_alpha=cfg.LOSS.FOCAL_ALPHA, refer_matcher=ref_matcher)

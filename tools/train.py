@@ -83,7 +83,7 @@ def get_ip(ip_addr):
     for i in range(4):
         if ip_list[i][0] == '[':
             ip_list[i] = ip_list[i][1:].split(',')[0]
-    return f'tcp://{ip_list[0]}.{ip_list[1]}.{ip_list[2]}.{ip_list[3]}:24226'
+    return f'tcp://{ip_list[0]}.{ip_list[1]}.{ip_list[2]}.{ip_list[3]}:21246'
 
 def main_per_worker():
     args = parse_args()
@@ -226,7 +226,9 @@ def main_per_worker():
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, cfg.TRAIN.LR_DROP)
     model, optimizer, lr_scheduler, last_iter = load_checkpoint(cfg, model,
         optimizer, lr_scheduler, device)
-
+    lr_scheduler = torch.optim.lr_scheduler.StepLR(
+        optimizer,
+        cfg.TRAIN.LR_DROP)
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset,

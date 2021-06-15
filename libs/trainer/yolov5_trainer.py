@@ -51,6 +51,7 @@ class TrackTrainer(BaseTrainer):
         self.max_norm = max_norm
         self.logger = logger
         self.prev_features = None
+        self.num_queries = self.cfg.TRANSFORMER.NUM_QUERIES
         
     def _read_inputs(self, inputs):
         imgs, next_imgs, targets, filenames = inputs
@@ -78,10 +79,10 @@ class TrackTrainer(BaseTrainer):
         ### Modified ###
         indices = self.criterion.out_indices
         out_id_features = self.model.module.out_id_features.detach()
-        out_prev_boxes = self.model.module.out_pred_boxes.detach()
-        out_prob = self.model.module.out_prob.detach()
+        out_prev_boxes = self.model.module.outputs_coords.detach()
+        out_prob = self.model.module.out_probs.detach()
         # no detach
-        prev_memory = self.model.module.out_memory.detach()
+        prev_memory = [memory.detach() for memory in self.model.module.out_memory]
         assert len(indices) == len(targets)
         references = []
         for i in range(len(indices)):
@@ -101,21 +102,28 @@ class TrackTrainer(BaseTrainer):
                 valid_idx = []
             else:
                 valid_idx = [torch.where(tgt==idx)[0][0] for idx in matched_idx]
-            prev_features = id_features[src[torch.as_tensor(valid_idx).reshape(-1, ).long()]]
-            ref_boxes = prev_boxes[src[torch.as_tensor(valid_idx).reshape(-1, ).long()]]
-            ref_scores = prev_scores[src[torch.as_tensor(valid_idx).reshape(-1, ).long()]]
+            
+            # padding
+            valid_prev_features = id_features[src[torch.as_tensor(valid_idx).reshape(-1, ).long()]]
+            valid_ref_boxes = prev_boxes[src[torch.as_tensor(valid_idx).reshape(-1, ).long()]]
+            valid_ref_scores = prev_scores[src[torch.as_tensor(valid_idx).reshape(-1, ).long()]]
 
-            # valid_idx = torch.where(ref_scores>=0.4)[0]
-            # ref_boxes = ref_boxes[valid_idx]
-            # matched_idx = matched_idx[valid_idx]
-            # prev_features = prev_features[valid_idx]
-            # gt_ref_boxes = gt_ref_boxes[valid_idx]
-            # gt_ref_ids = gt_ref_ids[valid_idx]
-            # idx_map = idx_map[valid_idx]
+            padding_mask = torch.ones((self.num_queries,), dtype=torch.bool, device=self.device)
+            ref_num = len(valid_prev_features)
+            padding_mask[:ref_num] = False
+            prev_features = torch.zeros(self.num_queries, valid_prev_features.shape[
+                -1]).to(valid_prev_features.device)
+            ref_boxes = torch.zeros(self.num_queries, valid_ref_boxes.shape[
+                -1]).to(valid_ref_boxes.device)
+            ref_scores = torch.zeros(self.num_queries, valid_ref_scores.shape[
+                -1]).to(valid_ref_scores.device)
+            prev_features[:ref_num] = valid_prev_features
+            ref_boxes[:ref_num] = valid_ref_boxes
+            ref_scores[:ref_num] = valid_ref_scores
 
             references.append(dict(ref_features=prev_features, ref_boxes=ref_boxes, idx_map=idx_map,
                                    input_size=input_size, gt_ref_boxes=gt_ref_boxes, prev_memory=prev_memory,
-                                   gt_ref_ids=gt_ref_ids))
+                                   gt_ref_ids=gt_ref_ids, padding_mask=padding_mask.detach()))
         if len(references) == 0:
             references = None
         outputs = self.model(next_imgs, references)
@@ -131,7 +139,6 @@ class TrackTrainer(BaseTrainer):
         self.criterion.train()
         metric_logger = utils.MetricLogger(delimiter="  ")
         metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-        metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
         metric_logger.add_meter('id_class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
         header = 'Epoch: [{}]'.format(self.epoch)
         print_freq = self.cfg.TRAIN.PRINT_FREQ
@@ -171,7 +178,6 @@ class TrackTrainer(BaseTrainer):
             self.optimizer.step()
 
             metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled)
-            metric_logger.update(class_error=loss_dict_reduced['class_error'])
             metric_logger.update(id_class_error=loss_dict_reduced['id_class_error'])
             metric_logger.update(lr=self.optimizer.param_groups[0]["lr"])
 

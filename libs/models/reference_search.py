@@ -121,8 +121,10 @@ class ReferenceSearch(nn.Module):
         return valid_ratio
 
     def forward(self, srcs, masks, pos_embeds, query_embed=None, refer_matcher=None, references=None):
-        assert self.two_stage or query_embed is not None
-
+        assert references is not None
+        for i in range(len(srcs)):
+            prev_srcs_i = references[0]['prev_memory'][i]
+            srcs[i] = srcs[i] + prev_srcs_i
         # prepare input for encoder
         src_flatten = []
         mask_flatten = []
@@ -149,22 +151,19 @@ class ReferenceSearch(nn.Module):
         # encoder
         memory = self.encoder(src_flatten, spatial_shapes, level_start_index, valid_ratios, lvl_pos_embed_flatten, mask_flatten)
 
-        import pdb; pdb.set_trace()
         match_hs = None
         match_inter_references = None
-        if references is not None:
-            prev_memory = torch.cat([v['prev_memory'] for v in references])
-            ref_boxes = torch.cat([v["ref_boxes"] for v in references])
-            if len(ref_boxes) > 0:
-                joint_memory = memory + prev_memory
-                prev_points = ref_boxes[..., :2].unsqueeze(0)
-                match_pos_trans_out = self.match_pos_trans_norm(self.match_pos_trans(self.get_proposal_pos_embed(
-                    inverse_sigmoid(ref_boxes).unsqueeze(0))))
-                match_query_embed, match_tgt = torch.split(match_pos_trans_out, c, dim=2)
-                match_hs, match_inter_references = self.match_decoder(match_tgt, prev_points, joint_memory, spatial_shapes,
-                    level_start_index, valid_ratios, match_query_embed, mask_flatten)
         
-            return memory, match_hs, match_inter_references
+        ref_boxes = torch.stack([v["ref_boxes"] for v in references], dim=0)
+        if len(ref_boxes) > 0:
+            prev_points = ref_boxes[..., :2]
+            match_pos_trans_out = self.match_pos_trans_norm(self.match_pos_trans(self.get_proposal_pos_embed(
+                inverse_sigmoid(ref_boxes))))
+            match_query_embed, match_tgt = torch.split(match_pos_trans_out, c, dim=2)
+            match_hs, match_inter_references = self.match_decoder(match_tgt, prev_points, memory, spatial_shapes,
+                level_start_index, valid_ratios, match_query_embed, mask_flatten)
+
+            return match_hs, match_inter_references
 
 
 

@@ -14,11 +14,11 @@ from torch.cuda import amp
 
 import sys
 
-from utils.activations import SiLU
-from utils.datasets import letterbox
-from utils.general import non_max_suppression, make_divisible, scale_coords, increment_path, xyxy2xywh, save_one_box
-from utils.plots import colors, plot_one_box
-from utils.torch_utils import time_synchronized
+from libs.models.yolov5.utils.activations import SiLU
+from libs.models.yolov5.utils.datasets import letterbox
+from libs.models.yolov5.utils.general import non_max_suppression, make_divisible, scale_coords, increment_path, xyxy2xywh, save_one_box
+from libs.models.yolov5.utils.plots import colors, plot_one_box
+from libs.models.yolov5.utils.torch_utils import time_synchronized
 
 
 def autopad(k, p=None):  # kernel, padding

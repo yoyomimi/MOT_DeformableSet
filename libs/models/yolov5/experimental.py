@@ -4,9 +4,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from common import Conv, DWConv
-from utils.activations import SiLU
-from utils.google_utils import attempt_download
+from libs.models.yolov5.common import Conv, DWConv
+from libs.models.yolov5.utils.activations import SiLU
+from libs.models.yolov5.utils.google_utils import attempt_download
 
 
 class CrossConv(nn.Module):
