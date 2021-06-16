@@ -37,8 +37,8 @@ class MatchCHDataset(Dataset):
             if len(anno['ann']['extra_anns']) == 0:
                 anno['ann']['extra_anns'] = -np.ones(len(anno['ann']['bboxes'])).reshape(-1, )
             for j, single_id in enumerate(anno['ann']['extra_anns']):
-                # if cur_id >= 60000:
-                if cur_id >= 0:
+                if cur_id >= 5000:
+                # if cur_id >= 0:
                     anno['ann']['extra_anns'][j] = -1
                 else:
                     anno['ann']['extra_anns'][j] = cur_id

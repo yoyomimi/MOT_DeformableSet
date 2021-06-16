@@ -51,7 +51,7 @@ def parse_args():
     parser.add_argument(
         '--dist-url',
         dest='dist_url',
-        default='tcp://10.5.38.36:23456',
+        default='tcp://10.5.38.36:13456',
         type=str,
         help='url used to set up distributed training')
     parser.add_argument(
@@ -83,7 +83,7 @@ def get_ip(ip_addr):
     for i in range(4):
         if ip_list[i][0] == '[':
             ip_list[i] = ip_list[i][1:].split(',')[0]
-    return f'tcp://{ip_list[0]}.{ip_list[1]}.{ip_list[2]}.{ip_list[3]}:21246'
+    return f'tcp://{ip_list[0]}.{ip_list[1]}.{ip_list[2]}.{ip_list[3]}:2246'
 
 def main_per_worker():
     args = parse_args()

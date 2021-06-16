@@ -79,7 +79,7 @@ def get_ip(ip_addr):
     for i in range(4):
         if ip_list[i][0] == '[':
             ip_list[i] = ip_list[i][1:].split(',')[0]
-    return f'tcp://{ip_list[0]}.{ip_list[1]}.{ip_list[2]}.{ip_list[3]}:23445'
+    return f'tcp://{ip_list[0]}.{ip_list[1]}.{ip_list[2]}.{ip_list[3]}:13545'
 
 def get_warp_matrix(src, dst, warp_mode = cv2.MOTION_HOMOGRAPHY, eps = 1e-5,
         max_iter = 100, scale = None, align = False):
@@ -171,7 +171,7 @@ def read_img(img_path):
     image = F_trans.normalize(image, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     return image
 
-def process_img(img_path, model, postprocessors, device, threshold=0.38, references=None):
+def process_img(img_path, model, postprocessors, device, threshold=0.42, references=None):
     model.eval()
     ori_img = cv2.imread(img_path, cv2.IMREAD_COLOR)
     h, w = ori_img.shape[:2]
@@ -520,25 +520,25 @@ if __name__ == '__main__':
     #               Venice-1'''
     # data_root = os.path.join(data_dir, 'MOT15/images/test')
     # test mot17
-    # seqs_str = '''MOT17-01-SDP
-    #               MOT17-03-SDP
-    #               MOT17-06-SDP
-    #               MOT17-07-SDP
-    #               MOT17-08-SDP
-    #               MOT17-12-SDP
-    #               MOT17-14-SDP'''
+    seqs_str = '''MOT17-01-SDP
+                  MOT17-03-SDP
+                  MOT17-06-SDP
+                  MOT17-07-SDP
+                  MOT17-08-SDP
+                  MOT17-12-SDP
+                  MOT17-14-SDP'''
     # seqs_str = '''MOT17-01-SDP'''
-    # data_root = os.path.join(data_dir, 'MOT17/test')
+    data_root = os.path.join(data_dir, 'MOT17/test')
     # val mot17
-    seqs_str = '''MOT17-02-SDP
-                  MOT17-04-SDP
-                  MOT17-05-SDP
-                  MOT17-09-SDP
-                  MOT17-10-SDP
-                  MOT17-11-SDP
-                  MOT17-13-SDP'''
+    # seqs_str = '''MOT17-02-SDP
+    #               MOT17-04-SDP
+    #               MOT17-05-SDP
+    #               MOT17-09-SDP
+    #               MOT17-10-SDP
+    #               MOT17-11-SDP
+    #               MOT17-13-SDP'''
     # seqs_str = '''MOT17-02-SDP'''
-    data_root = os.path.join(data_dir, 'MOT17/train')
+    # data_root = os.path.join(data_dir, 'MOT17/train')
     # # val mot15
     # seqs_str = '''Venice-2
     #               KITTI-13

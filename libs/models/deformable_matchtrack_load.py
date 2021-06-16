@@ -666,15 +666,19 @@ def build_model(cfg, device):
     transformer = build_deforamble_transformer(cfg)
     matcher = build_matcher(cfg)
     ref_matcher = build_matchtrack_matcher(cfg)
+
     model = DeformableMatchTrack(
         backbone,
         transformer,
+        emb_dim=cfg.RS.EMB_DIM,
+        dataset_nids=cfg.RS.NIDS,
         num_classes=num_classes,
         num_queries=cfg.TRANSFORMER.NUM_QUERIES,
         num_feature_levels=cfg.TRANSFORMER.NUM_FEATURE_LEVELS,
         aux_loss=cfg.LOSS.AUX_LOSS,
         with_box_refine=cfg.DEFORMABLE.WITH_BOX_REFINE,
         two_stage=cfg.DEFORMABLE.TWO_STAGE,
+        num_match_decoder_layers=cfg.RS.NUM_LAYERS
     )
     weight_dict = {'loss_ce': cfg.LOSS.CLS_LOSS_COEF, 'loss_bbox': cfg.LOSS.BBOX_LOSS_COEF}
     weight_dict['loss_giou'] = cfg.LOSS.GIOU_LOSS_COEF

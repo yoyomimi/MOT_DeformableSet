@@ -35,7 +35,7 @@ def _get_clones(module, N):
 
 class YOLOv5Match(nn.Module):
     def __init__(self, detector, transformer, position_embedding, num_classes, num_queries,
-                 num_feature_levels=3, emb_dim=64, dataset_nids=777, aux_loss=True,
+                 num_feature_levels=3, emb_dim=64, dataset_nids=5777, aux_loss=True,
                  num_match_decoder_layers=6):
         # ch: 439046 14687 60000 776 2324 897 757
         """ Initializes the model.
@@ -124,9 +124,9 @@ class YOLOv5Match(nn.Module):
             m = samples.mask
             assert m is not None
             mask = F.interpolate(m[None].float(), size=x.shape[-2:]).to(torch.bool)[0]
-            x = NestedTensor(x, mask)
-            features.append(x)
-            pos.append(self.position_embedding(x).to(x.tensors.dtype))
+            nested_x = NestedTensor(x.clone(), mask)
+            features.append(nested_x)
+            pos.append(self.position_embedding(nested_x).to(nested_x.tensors.dtype))
         srcs = []
         masks = []
         for l, feat in enumerate(features):
@@ -168,7 +168,7 @@ class YOLOv5Match(nn.Module):
                     ref_id_embed = self.emb_scale * F.normalize(ref_id_embed)
                     ref_id_embed = self.id_head(ref_id_embed.contiguous())
                 tmp = self.ref_embed[lvl](match_hs[lvl])
-                tmp += reference
+                tmp = tmp + reference
                 ref_coords.append(tmp.sigmoid())
         else:
             match_hs = None
@@ -178,10 +178,9 @@ class YOLOv5Match(nn.Module):
         outputs_id_embeds = []
         outputs_id_features = []
         outputs_next_centers = []
-
+    
         z = []
         grid = [torch.zeros(1)] * len(det_preds)
-        ori_det_preds = det_preds.copy()
         for i in range(len(det_preds)):
             bs, _, ny, nx, _ = det_preds[i].shape
             yv, xv = torch.meshgrid([torch.arange(ny), torch.arange(nx)])
@@ -204,9 +203,9 @@ class YOLOv5Match(nn.Module):
         outputs_id_features = torch.cat(outputs_id_features, 1)
         final_out_preds, final_id_features = non_max_suppression(
             out, 0.05, 0.45, max_det=self.num_queries, addict=outputs_id_features)
-        self.outputs_coords = []
-        self.out_id_features = []
-        self.out_probs = []
+        outputs_coords = []
+        out_id_features = []
+        out_probs = []
 
         for i in range(len(final_out_preds)):
             coord = torch.zeros(self.num_queries, 4).to(out.device)
@@ -217,24 +216,32 @@ class YOLOv5Match(nn.Module):
             coord[:ref_num] = xyxy2xywh(final_out_preds[i][..., :4].view(-1, 4))
             prob[:ref_num] = final_out_preds[i][..., 4].view(-1, 1)
             id_features[:ref_num] = final_id_features[i]
-            self.outputs_coords.append(coord)
-            self.out_probs.append(prob)
-            self.out_id_features.append(id_features)
+            outputs_coords.append(coord)
+            out_probs.append(prob)
+            out_id_features.append(id_features)
         
-        self.outputs_coords = torch.stack(self.outputs_coords)
-        self.out_probs = torch.stack(self.out_probs)
-        self.out_id_features = torch.stack(self.out_id_features)
+        outputs_coords = torch.stack(outputs_coords)
+        out_probs = torch.stack(out_probs)
+        out_id_features = torch.stack(out_id_features)
 
-        out = {'pred_logits': self.out_probs, 'pred_boxes': self.outputs_coords,
-               'id_embeds': outputs_id_embeds, 'id_features': outputs_id_features,
-               'det_out': ori_det_preds
-               }
+        self.outputs_coords = outputs_coords.clone()
+        self.out_probs = out_probs.clone()
+        self.out_id_features = out_id_features.clone()
+        
+        self.outputs_id_embeds = outputs_id_embeds
+        self.outputs_id_features = outputs_id_features.clone()
+    
+        out_dict = {'pred_logits': out_probs, 'pred_boxes': outputs_coords,
+            'id_embeds': outputs_id_embeds, 'id_features': outputs_id_features,
+            'det_out': det_preds
+        }
+        
 
         if references is not None and match_hs is not None:
-            out['ref_outputs'] = {'ref_coords': ref_coords[-1],
+            out_dict['ref_outputs'] = {'ref_coords': ref_coords[-1],
                'ref_id_embeds': ref_id_embed, 'ref_id_features': ref_id_feature}
-            out['aux_ref_outputs'] = [{'ref_coords': a} for a in ref_coords[:-1]]
-        return out
+            out_dict['aux_ref_outputs'] = [{'ref_coords': a} for a in ref_coords[:-1]]
+        return out_dict
 
     @torch.jit.unused
     def _set_aux_loss(self, outputs_class, outputs_coord):
@@ -297,6 +304,7 @@ class SetCriterion(nn.Module):
                 cat_targets.append(target)
 
         cat_targets = torch.cat(cat_targets, dim=0)
+
         lbox, lobj, _, lids = self.det_loss([det_preds, outputs_id_embeds], cat_targets)
         lbox /= num_boxes
         lids /= num_boxes
@@ -411,7 +419,7 @@ class SetCriterion(nn.Module):
                     torch.distributed.all_reduce(ref_num_boxes)
                 ref_num_boxes = torch.clamp(ref_num_boxes / get_world_size(), min=1).item()
                 q_padding_mask = torch.stack([r["padding_mask"] for r in references], dim=0)
-            losses.update(self.loss_match(outputs, references, None, ref_num_boxes, q_padding_mask, is_next=is_next))
+                losses.update(self.loss_match(outputs, references, None, ref_num_boxes, q_padding_mask, is_next=is_next))
 
         return losses
 
@@ -521,6 +529,7 @@ def build_model(cfg, device):
         num_feature_levels=nl,
         aux_loss=cfg.LOSS.AUX_LOSS,
     )
+
     weight_dict = {'loss_ce': 1.0, 'loss_bbox': 1.0}
     # TODO this is a hack
     if cfg.LOSS.AUX_LOSS:

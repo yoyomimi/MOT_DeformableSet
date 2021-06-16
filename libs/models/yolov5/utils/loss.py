@@ -164,7 +164,7 @@ class ComputeLoss:
                 pwh = (ps[:, 2:4].sigmoid() * 2) ** 2 * anchors[i]
                 pbox = torch.cat((pxy, pwh), 1)  # predicted box
                 iou = bbox_iou(pbox.T, tbox[i], x1y1x2y2=False, CIoU=True)  # iou(prediction, target)
-                lbox += (1.0 - iou).mean()  # iou loss
+                lbox = lbox + (1.0 - iou).mean()  # iou loss
                 # Objectness
                 tobj[b, a, gj, gi] = (1.0 - self.gr) + self.gr * iou.detach().clamp(0).type(tobj.dtype)  # iou ratio
 
@@ -172,7 +172,7 @@ class ComputeLoss:
                 if self.nc > 1:  # cls loss (only if multiple classes)
                     t = torch.full_like(ps[:, 5:], self.cn, device=device)  # targets
                     t[range(n), tcls[i]] = self.cp
-                    lcls += self.BCEcls(ps[:, 5:], t)  # BCE
+                    lcls = lcls + self.BCEcls(ps[:, 5:], t)  # BCE
 
                 # Append targets to text file
                 # with open('targets.txt', 'a') as file:
@@ -189,18 +189,19 @@ class ComputeLoss:
                     target_ids_onehot.scatter_(1, target_ids.long().unsqueeze(-1), 1)
 
                     target_ids_onehot = target_ids_onehot[:,:-1]
-                    lids += sigmoid_focal_loss(outputs_src_id_logits, target_ids_onehot, reduction='sum', alpha=0.25, gamma=2)
+                    lids = lids + sigmoid_focal_loss(outputs_src_id_logits, target_ids_onehot, reduction='sum', alpha=0.25, gamma=2)
             
             obji = self.BCEobj.to(pi.device)(pi[..., 4], tobj)
-            lobj += obji * self.balance[i]  # obj loss
+            lobj = lobj + obji * self.balance[i]  # obj loss
             if self.autobalance:
                 self.balance[i] = self.balance[i] * 0.9999 + 0.0001 / obji.detach().item()
 
         if self.autobalance:
             self.balance = [x / self.balance[self.ssi] for x in self.balance]
-        lbox *= self.hyp['box']
-        lobj *= self.hyp['obj']
-        lcls *= self.hyp['cls']
+
+        lbox = lbox * self.hyp['box']
+        lobj = lobj * self.hyp['obj']
+        lcls = lcls * self.hyp['cls']
 
         return lbox.mean(), lobj.mean(), lcls.mean(), lids.mean()
 

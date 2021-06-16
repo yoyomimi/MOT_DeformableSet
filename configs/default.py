@@ -55,6 +55,11 @@ _C.MODEL.RESUME_PATH = ''
 _C.MODEL.MASKS = False
 _C.MODEL.MODEL_CONFIG = ''
 
+_C.RS = CN()
+_C.RS.EMB_DIM = 64
+_C.RS.NIDS = 5000
+_C.RS.NUM_LAYERS = 6
+
 # backbone
 _C.BACKBONE = CN()
 _C.BACKBONE.NAME = 'resnet50'

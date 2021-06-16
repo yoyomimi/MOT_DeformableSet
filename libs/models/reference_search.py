@@ -122,15 +122,16 @@ class ReferenceSearch(nn.Module):
 
     def forward(self, srcs, masks, pos_embeds, query_embed=None, refer_matcher=None, references=None):
         assert references is not None
+        joint_srcs = [src.clone() for src in srcs]
         for i in range(len(srcs)):
             prev_srcs_i = references[0]['prev_memory'][i]
-            srcs[i] = srcs[i] + prev_srcs_i
+            joint_srcs[i] = srcs[i] + prev_srcs_i
         # prepare input for encoder
         src_flatten = []
         mask_flatten = []
         lvl_pos_embed_flatten = []
         spatial_shapes = []
-        for lvl, (src, mask, pos_embed) in enumerate(zip(srcs, masks, pos_embeds)):
+        for lvl, (src, mask, pos_embed) in enumerate(zip(joint_srcs, masks, pos_embeds)):
             bs, c, h, w = src.shape
             spatial_shape = (h, w)
             spatial_shapes.append(spatial_shape)

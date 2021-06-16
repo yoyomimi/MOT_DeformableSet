@@ -65,23 +65,13 @@ class TrackTrainer(BaseTrainer):
         imgs = data[0]
         next_imgs = data[1]
         targets = data[2]
-        # warp_matrix = []
-        # for t in targets:
-        #     if len(t["warp_matrix"]) == 0:
-        #         warp_matrix = None
-        #         target_sizes = None
-        #         break
-        # if warp_matrix is not None:
-        #     warp_matrix = torch.stack([t["warp_matrix"] for t in targets])
-        #     target_sizes = targets[0]['size'].expand(len(imgs), 2)
-        outputs = self.model(imgs)
+        outputs = self.model.module(imgs)
         loss_dict_prev = self.criterion(outputs, targets)
         ### Modified ###
         indices = self.criterion.out_indices
         out_id_features = self.model.module.out_id_features.detach()
         out_prev_boxes = self.model.module.outputs_coords.detach()
         out_prob = self.model.module.out_probs.detach()
-        # no detach
         prev_memory = [memory.detach() for memory in self.model.module.out_memory]
         assert len(indices) == len(targets)
         references = []
@@ -123,11 +113,12 @@ class TrackTrainer(BaseTrainer):
 
             references.append(dict(ref_features=prev_features, ref_boxes=ref_boxes, idx_map=idx_map,
                                    input_size=input_size, gt_ref_boxes=gt_ref_boxes, prev_memory=prev_memory,
-                                   gt_ref_ids=gt_ref_ids, padding_mask=padding_mask.detach()))
+                                   gt_ref_ids=gt_ref_ids, padding_mask=padding_mask))
         if len(references) == 0:
             references = None
-        outputs = self.model(next_imgs, references)
-        loss_dict_next = self.criterion(outputs, targets, is_next=True, references=references)
+
+        next_outputs = self.model.module(next_imgs, references)
+        loss_dict_next = self.criterion(next_outputs, targets, is_next=True, references=references)
         loss_dict = {k: 0.5*(v + loss_dict_next[k]) for k, v in loss_dict_prev.items()}
         loss_dict.update({k: v for k, v in loss_dict_next.items() if k not in loss_dict_prev.keys()})
         ##########
@@ -139,7 +130,7 @@ class TrackTrainer(BaseTrainer):
         self.criterion.train()
         metric_logger = utils.MetricLogger(delimiter="  ")
         metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-        metric_logger.add_meter('id_class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
+        # metric_logger.add_meter('id_class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
         header = 'Epoch: [{}]'.format(self.epoch)
         print_freq = self.cfg.TRAIN.PRINT_FREQ
 
@@ -178,7 +169,7 @@ class TrackTrainer(BaseTrainer):
             self.optimizer.step()
 
             metric_logger.update(loss=loss_value, **loss_dict_reduced_scaled)
-            metric_logger.update(id_class_error=loss_dict_reduced['id_class_error'])
+            # metric_logger.update(id_class_error=loss_dict_reduced['id_class_error'])
             metric_logger.update(lr=self.optimizer.param_groups[0]["lr"])
 
         # gather the stats from all processes

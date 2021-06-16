@@ -1,4 +1,4 @@
-OUTPUT_ROOT: matchtrack_nomatch_layer6_joint_scratch
+OUTPUT_ROOT: matchtrack_realnomatch_layer6_joint_15scracth_eval
 DIST_BACKEND: 'nccl'
 WORKERS: 4
 DEVICE: cuda
@@ -20,7 +20,10 @@ MODEL:
   NAME: DeformableMatchTrack
   # RESUME_PATH: 'data/r50_deformable_detr-checkpoint.pth'
   RESUME_PATH: 'data/r50_deformable_detr_plus_iterative_bbox_refinement_plus_plus_two_stage-checkpoint.pth'
-  # RESUME_PATH: 'output/matchtrack_15_ch_6w_layer6_joint_DeformableMatchTrack_epoch020_checkpoint.pth'
+RS:
+  EMB_DIM: 64
+  NIDS: 777
+  NUM_LAYERS: 6
 BACKBONE:
   NAME: resnet50
   DIALATION: False
