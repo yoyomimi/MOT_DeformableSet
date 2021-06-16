@@ -22,7 +22,7 @@ MODEL:
   RESUME_PATH: 'data/r50_deformable_detr_plus_iterative_bbox_refinement_plus_plus_two_stage-checkpoint.pth'
 RS:
   EMB_DIM: 64
-  NIDS: 777
+  NIDS: 5777
   NUM_LAYERS: 6
 BACKBONE:
   NAME: resnet50
