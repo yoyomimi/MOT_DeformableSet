@@ -113,9 +113,9 @@ srun --partition=$PARTITION --mpi=pmi2 -n 1 --gres=gpu:1 --ntasks-per-node=8 --j
      MODEL.RESUME_PATH [resume_path](e.g. output/matchtrack_epoch025_checkpoint.pth)
 ```
 
-- results saved in work_dirs/$output_root$/results/
+- Results saved in work_dirs/$output_root$/results/
 
-- test results on MOT17, thr=0.38-0.42 (0.38 will be fine), our results is FRT (emphasized in red) in the following result picture.
+- Test results on MOT17, thr=0.38-0.42 (0.38 will be fine), our results is FRT (emphasized in red) in the following result picture.
 ![Image](https://github.com/yoyomimi/MOT_DeformableSet/blob/large/results.png)
 
 ## YOLOv5 + RS
