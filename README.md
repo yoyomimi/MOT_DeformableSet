@@ -1,7 +1,7 @@
 # MOT_DeformableSet
 
 ## Method
-![contents](https://github.com/yoyomimi/MOT_DeformableSet/blob/large/mainv3.pdf)
+![Image](https://github.com/yoyomimi/MOT_DeformableSet/blob/large/TR-MOT.png)
 
 ## Data
 - The data should be prepared in the following structure (one example):
