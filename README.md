@@ -1,5 +1,8 @@
 # MOT_DeformableSet
 
+## Method
+![image](https://github.com/yoyomimi/MOT_DeformableSet/blob/large/mainv3.pdf)
+
 ## Data
 - The data should be prepared in the following structure (one example):
 ```
