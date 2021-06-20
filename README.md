@@ -124,3 +124,6 @@ PARTITION = pat_largescale
 srun --partition=$PARTITION --mpi=pmi2 -n 12 --gres=gpu:6 --ntasks-per-node=8 --job-name=TRAIN --kill-on-bad-exit=1  python3 tools/train.py --cfg configs/YOLOv5m_matchtrack.yaml
 ```
 Pending check to this part...
+
+## Notice
+If you get any `address already in use` errror, please modify the port number of the returned ip address from the function `get_ip_address` in train.py or offset_track.py. Or you can just rewrite this function to generate ip address with a random port.
