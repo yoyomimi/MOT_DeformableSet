@@ -67,7 +67,6 @@ max_id = $crowdhuman_idnum$ + 1
  
 ## Pretrain on CrowdHuman and MOT17
 ```shell
-PARTITION = pat_largescale
 srun --partition=$PARTITION --mpi=pmi2 -n 12 --gres=gpu:6 --ntasks-per-node=8 --job-name=TRAIN --kill-on-bad-exit=1  python3 tools/train.py --cfg configs/deformable_macthtrack_ch.yaml
 ```
 - Involve all crowdhuman boxes or most of them for id appearance supervision and rs module training. The invovled box num is up to the GPU memory.
@@ -79,7 +78,6 @@ srun --partition=$PARTITION --mpi=pmi2 -n 12 --gres=gpu:6 --ntasks-per-node=8 --
 
 ## Finetune on MOT
 ```shell
-PARTITION = pat_largescale
 srun --partition=$PARTITION --mpi=pmi2 -n 12 --gres=gpu:6 --ntasks-per-node=8 --job-name=TRAIN --kill-on-bad-exit=1  python3 tools/train.py --cfg configs/deformable_track.yaml
 ```
 - Involve 0 crowdhuman boxes (crowdhuman_idnum = 0) for id appearance training or rs module training
@@ -122,7 +120,6 @@ srun --partition=$PARTITION --mpi=pmi2 -n 1 --gres=gpu:1 --ntasks-per-node=8 --j
 
 ## YOLOv5 + RS
 ```shell
-PARTITION = pat_largescale
 srun --partition=$PARTITION --mpi=pmi2 -n 12 --gres=gpu:6 --ntasks-per-node=8 --job-name=TRAIN --kill-on-bad-exit=1  python3 tools/train.py --cfg configs/YOLOv5m_matchtrack.yaml
 ```
 Pending check to this part...
