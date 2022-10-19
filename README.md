@@ -1,6 +1,6 @@
 # MOT_DeformableSet
 
-## Paper arxiv link: [ paper ](https://arxiv.org/pdf/2203.16621.pdf  " paper ").
+## Paper arxiv link: [TR-MOT: Multi-Object Tracking by Reference](https://arxiv.org/pdf/2203.16621.pdf  "paper").
 
 ## Method
 ![Image](https://github.com/yoyomimi/MOT_DeformableSet/blob/large/TR-MOT.png)
